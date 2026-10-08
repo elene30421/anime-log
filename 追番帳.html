@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>追番帳</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E8ECF2; --surface:#FFFFFF; --sunk:#F2F4F8; --ink:#17202E; --muted:#5A6477; --line:#D0D7E2;
+  --watched:#2E54F0; --aired:#C3CEFF; --airedLine:#2E54F0; --future:#A9B2C1;
+  --live:#E8265E; --done:#11866A; --soon:#B26A00;
+  --sans:'Noto Sans TC','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
+  --num:'Barlow Condensed','Arial Narrow','Roboto Condensed',sans-serif;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#11161F; --surface:#1A212D; --sunk:#151B26; --ink:#E5E9F1; --muted:#97A1B4; --line:#2B3446;
+    --watched:#6F8CFF; --aired:#28336A; --airedLine:#6F8CFF; --future:#465063;
+    --live:#FF5A86; --done:#38C796; --soon:#F0A93A; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11161F; --surface:#1A212D; --sunk:#151B26; --ink:#E5E9F1; --muted:#97A1B4; --line:#2B3446;
+  --watched:#6F8CFF; --aired:#28336A; --airedLine:#6F8CFF; --future:#465063;
+  --live:#FF5A86; --done:#38C796; --soon:#F0A93A; color-scheme:dark;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--watched);outline-offset:2px}
+img{max-width:100%}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 20px 80px}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px}
+.brand h1{margin:0;font-size:44px;font-weight:900;letter-spacing:.04em;line-height:1}
+.brand p{margin:8px 0 0;color:var(--muted);font-size:14px}
+.tally{display:flex;gap:22px}
+.tally div{display:flex;flex-direction:column;align-items:flex-end}
+.tally b{font-family:var(--num);font-size:40px;font-weight:700;line-height:1}
+.tally span{font-size:13px;color:var(--muted)}
+.tally .hot b{color:var(--live)}
+
+.bar-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+.search{flex:1 1 320px;display:flex;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.search select{border:0;background:var(--sunk);padding:0 10px;border-right:1px solid var(--line)}
+.search input{flex:1;min-width:0;border:0;background:transparent;padding:11px 12px;outline:none}
+.search button{border:0;background:var(--ink);color:var(--surface);padding:0 18px;font-weight:700}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:9px 14px;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--watched);border-color:var(--watched);color:#fff;font-weight:700}
+.btn.small{padding:5px 10px;font-size:13px}
+.btn.danger{color:var(--live)}
+.sync{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.sync button{border:0;background:none;color:var(--watched);padding:0;font-weight:700;text-decoration:underline;text-underline-offset:3px}
+
+/* results */
+.results{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px 14px;margin-bottom:22px}
+.results-head{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:14px;color:var(--muted)}
+.hit{display:grid;grid-template-columns:46px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.hit img{width:46px;height:64px;object-fit:cover;border-radius:4px;background:var(--sunk)}
+.hit h4{margin:0;font-size:15px;font-weight:700}
+.hit p{margin:2px 0 0;font-size:13px;color:var(--muted)}
+
+/* tabs */
+.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:2px solid var(--line);margin-bottom:14px}
+.tabs button{border:0;background:none;padding:10px 14px;font-weight:500;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink);font-weight:700}
+.tabs .n{font-family:var(--num);font-size:16px;margin-left:4px}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-bottom:14px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+
+/* cards */
+.list{display:flex;flex-direction:column;gap:12px}
+.card{display:grid;grid-template-columns:92px 1fr;gap:16px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.cover{width:92px;aspect-ratio:92/130;object-fit:cover;border-radius:6px;background:var(--sunk);cursor:pointer}
+.body{min-width:0}
+.head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.title{margin:0;font-size:18px;font-weight:700;line-height:1.35;cursor:pointer}
+.sub{margin:1px 0 0;font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status-sel{border:1px solid var(--line);background:var(--sunk);border-radius:6px;padding:4px 6px;font-size:13px;flex-shrink:0}
+.facts{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:8px 0 6px;font-size:13px;color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;padding:2px 9px;border-radius:99px;border:1px solid currentColor}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.chip.live{color:var(--live)} .chip.done{color:var(--done)} .chip.soon,.chip.hiatus{color:var(--soon)}
+.chip.new{color:#fff;background:var(--live);border-color:var(--live)} .chip.new::before{background:#fff}
+.where{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:4px 0 8px}
+.where .now{font-size:17px;font-weight:700}
+.where .now b{font-family:var(--num);font-size:24px;font-weight:700;margin:0 2px}
+.where .lag{font-size:13.5px;font-weight:700;color:var(--live)}
+.where .lag.ok{color:var(--done)}
+
+.strip-row{display:grid;grid-template-columns:62px 1fr;gap:10px;align-items:start;padding:4px 0}
+.strip-label{font-size:12.5px;line-height:1.3;padding-top:1px}
+.strip-label b{display:block;font-weight:700}
+.strip-label span{color:var(--muted);font-size:11.5px}
+.cells{display:flex;flex-wrap:wrap;gap:3px}
+.cell{width:15px;height:20px;padding:0;border-radius:2px;border:1px solid var(--airedLine);background:var(--aired);position:relative}
+.cell.w{background:var(--watched);border-color:var(--watched)}
+.cell.f{background:transparent;border:1px dashed var(--future);cursor:default}
+.cell.nx::after{content:"";position:absolute;left:50%;top:-6px;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:var(--live)}
+.cell:not(.f):hover{transform:translateY(-2px)}
+.longbar{position:relative;height:14px;border-radius:3px;background:transparent;border:1px dashed var(--future);overflow:hidden;margin-top:3px}
+.longbar i{position:absolute;left:0;top:0;bottom:0}
+.longbar .a{background:var(--aired)} .longbar .w{background:var(--watched)}
+.longnum{font-family:var(--num);font-size:15px;color:var(--muted);margin-top:2px}
+.tbd{font-size:12.5px;color:var(--muted);padding-top:1px}
+
+.next{font-size:13px;color:var(--muted);margin-top:6px}
+.next b{color:var(--ink)}
+.memo{margin-top:8px;font-size:13.5px;color:var(--muted);border-left:3px solid var(--line);padding-left:10px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+.empty{text-align:center;padding:56px 20px;color:var(--muted);background:var(--surface);border:1px dashed var(--line);border-radius:12px}
+.empty p{margin:0 0 14px}
+
+/* dialogs */
+dialog{border:0;padding:0;border-radius:14px;background:var(--surface);color:var(--ink);width:min(720px,calc(100vw - 24px));max-height:calc(100dvh - 40px)}
+dialog::backdrop{background:rgba(10,14,22,.55)}
+.dlg{padding:20px 22px 22px}
+.dlg-head{display:grid;grid-template-columns:80px 1fr auto;gap:14px;align-items:start;margin-bottom:16px}
+.dlg-head img{width:80px;border-radius:6px}
+.dlg-head h2{margin:0;font-size:20px;line-height:1.3}
+.dlg-head p{margin:2px 0 0;font-size:13px;color:var(--muted)}
+.x{border:0;background:var(--sunk);width:34px;height:34px;border-radius:50%;font-size:18px;line-height:1}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:12px}
+.field input,.field select,.field textarea{border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:8px 10px;color:var(--ink);font-size:15px}
+.field textarea{min-height:90px;resize:vertical;line-height:1.6}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--line)}
+.season-item{display:grid;grid-template-columns:1fr auto;gap:8px 12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.season-item:last-child{border-bottom:0}
+.season-item small{display:block;color:var(--muted);font-size:12.5px}
+.setep{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.setep input{width:64px;border:1px solid var(--line);background:var(--sunk);border-radius:6px;padding:4px 6px;color:var(--ink)}
+.note{padding:10px 0;border-bottom:1px solid var(--line)}
+.note-meta{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:3px}
+.note-meta b{color:var(--watched);font-weight:700}
+.note-text{white-space:pre-wrap;word-break:break-word;font-size:14.5px}
+.note-del{border:0;background:none;color:var(--muted);font-size:12.5px;padding:0}
+.check{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted);margin:-4px 0 10px}
+.dlg-foot{display:flex;justify-content:space-between;gap:10px;margin-top:20px;flex-wrap:wrap}
+.dlg-foot a{color:var(--watched);font-size:14px;align-self:center}
+
+.season-nav{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.season-nav h2{margin:0;font-size:20px;flex:1}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:14px}
+.sitem{display:flex;flex-direction:column;gap:6px}
+.sitem img{width:100%;aspect-ratio:130/184;object-fit:cover;border-radius:6px;background:var(--sunk)}
+.sitem h4{margin:0;font-size:13.5px;line-height:1.35;font-weight:700;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.sitem p{margin:0;font-size:12px;color:var(--muted)}
+
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:calc(100vw - 32px);z-index:10}
+.toast.show{opacity:1}
+.foot{margin-top:40px;font-size:12.5px;color:var(--muted)}
+.foot a{color:inherit}
+.hidden{display:none !important}
+
+@media (max-width:560px){
+  .brand h1{font-size:34px}
+  .tally b{font-size:32px}
+  .card{grid-template-columns:64px 1fr;gap:12px;padding:12px}
+  .cover{width:64px}
+  .strip-row{grid-template-columns:1fr;gap:4px}
+  .strip-label b,.strip-label span{display:inline;margin-right:6px}
+  .row2{grid-template-columns:1fr}
+  .dlg-head{grid-template-columns:56px 1fr auto}
+  .dlg-head img{width:56px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}.cell:hover{transform:none !important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>追番帳</h1>
+      <p>作品資料自動從 AniList 抓取，你只需要點你看到哪一集。</p>
+    </div>
+    <div class="tally" id="tally"></div>
+  </header>
+
+  <div class="bar-tools">
+    <form class="search" id="searchForm">
+      <select id="searchType" aria-label="類型"><option value="ANIME">動畫</option><option value="MANGA">漫畫</option></select>
+      <input id="searchInput" type="search" placeholder="輸入日文、英文或羅馬拼音片名，例如 葬送のフリーレン" autocomplete="off">
+      <button type="submit">搜尋</button>
+    </form>
+    <button class="btn primary" id="openSeason">瀏覽每季新番</button>
+  </div>
+  <div class="sync" id="sync"></div>
+
+  <section class="results hidden" id="results"></section>
+
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <div class="legend" aria-hidden="true">
+    <span><i class="cell w" style="display:inline-block"></i>已看</span>
+    <span><i class="cell" style="display:inline-block"></i>已播出、還沒看</span>
+    <span><i class="cell f" style="display:inline-block"></i>還沒播</span>
+    <span><i class="cell f nx" style="display:inline-block"></i>下一集</span>
+    <span>點格子＝看到那一集</span>
+  </div>
+  <main class="list" id="list"></main>
+
+  <footer class="foot">
+    資料來源：<a href="https://anilist.co" target="_blank" rel="noopener">AniList</a>。紀錄存在這個瀏覽器裡，換電腦或清除瀏覽資料前請先
+    <button class="btn small" id="exportBtn">匯出備份</button>
+    <label class="btn small">匯入備份<input type="file" id="importInput" accept="application/json" hidden></label>
+  </footer>
+</div>
+
+<dialog id="detail"><div class="dlg" id="detailBody"></div></dialog>
+<dialog id="seasonDlg"><div class="dlg" id="seasonBody"></div></dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+const API='https://graphql.anilist.co';
+const KEY='zhuifan-log-v1';
+const ANIME_FMT=['TV','TV_SHORT','ONA'];
+const STATUS={watching:'在看',plan:'想看',completed:'看完',paused:'暫停',dropped:'棄坑'};
+const TABS=[['watching','在看'],['plan','想看'],['completed','看完'],['paused','暫停'],['dropped','棄坑'],['all','全部']];
+const SEASON_ZH={WINTER:'冬',SPRING:'春',SUMMER:'夏',FALL:'秋'};
+const FORMAT_ZH={TV:'TV',TV_SHORT:'短篇',ONA:'網路',MOVIE:'劇場版',OVA:'OVA',SPECIAL:'特別篇',MUSIC:'MV',MANGA:'漫畫',NOVEL:'小說',ONE_SHOT:'短篇漫畫'};
+const FIELDS='id type format status episodes chapters season seasonYear title{romaji native english} synonyms coverImage{large color} startDate{year month day} nextAiringEpisode{episode airingAt} siteUrl';
+const REL='relations{edges{relationType node{id type format}}}';
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+let state=load();
+let tab='watching';
+let openKey=null;
+let syncing=false;
+
+function load(){
+  try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.entries))return s;}catch(e){}
+  return {entries:[],lastSync:0};
+}
+function save(){
+  try{localStorage.setItem(KEY,JSON.stringify(state));}
+  catch(e){toast('無法存進瀏覽器，請先用「匯出備份」保存');}
+}
+let toastTimer;
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600);}
+
+/* ---------- AniList ---------- */
+let queue=Promise.resolve();
+function gql(query,variables){
+  const run=async()=>{
+    for(let attempt=0;attempt<3;attempt++){
+      let res;
+      try{
+        res=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({query,variables})});
+      }catch(e){throw new Error('NETWORK');}
+      if(res.status===429){
+        const wait=parseInt(res.headers.get('Retry-After'),10)||60;
+        setSyncText('AniList 請求太頻繁，'+wait+' 秒後自動繼續…');
+        await sleep(wait*1000);continue;
+      }
+      const j=await res.json();
+      if(j.errors&&!j.data)throw new Error(j.errors[0].message);
+      await sleep(350);
+      return j.data;
+    }
+    throw new Error('RATE');
+  };
+  const p=queue.then(run,run);
+  queue=p.catch(()=>{});
+  return p;
+}
+function netError(e){
+  if(e.message==='NETWORK')toast('連不上 AniList。請確認網路，或下載此檔案後直接用瀏覽器開啟');
+  else if(e.message==='RATE')toast('AniList 暫時拒絕請求，請過幾分鐘再試');
+  else toast('AniList 回傳錯誤：'+e.message);
+}
+function slim(m){
+  const edges=(m.relations&&m.relations.edges)||[];
+  const pick=t=>{
+    if(m.type==='MANGA')return null;
+    const e=edges.find(e=>e.relationType===t&&e.node.type==='ANIME'&&ANIME_FMT.includes(e.node.format));
+    return e?e.node.id:null;
+  };
+  return {
+    id:m.id,type:m.type,format:m.format,status:m.status,
+    episodes:m.type==='MANGA'?m.chapters:m.episodes,
+    season:m.season,seasonYear:m.seasonYear,title:m.title||{},synonyms:m.synonyms||[],
+    cover:m.coverImage?m.coverImage.large:'',start:m.startDate||{},
+    next:m.nextAiringEpisode||null,url:m.siteUrl,
+    sequel:pick('SEQUEL'),prequel:pick('PREQUEL')
+  };
+}
+async function fetchOne(id){
+  const d=await gql('query($id:Int){Media(id:$id){'+FIELDS+' '+REL+'}}',{id});
+  return slim(d.Media);
+}
+async function buildChain(id){
+  const cur=await fetchOne(id);
+  const seen=new Set([cur.id]);
+  const before=[];let p=cur;
+  while(p.prequel&&!seen.has(p.prequel)&&before.length<15){const x=await fetchOne(p.prequel);seen.add(x.id);before.unshift(x);p=x;}
+  const after=[];let n=cur;
+  while(n.sequel&&!seen.has(n.sequel)&&after.length<15){const x=await fetchOne(n.sequel);seen.add(x.id);after.push(x);n=x;}
+  return before.concat([cur],after);
+}
+
+/* ---------- helpers ---------- */
+function findEntryByMedia(id){return state.entries.find(e=>e.seasons.some(s=>s.id===id));}
+function getEntry(key){return state.entries.find(e=>String(e.key)===String(key));}
+function unit(e){return e.seasons[0].type==='MANGA'?'話':'集';}
+function titleOf(e){const t=e.seasons[0].title;return e.customTitle||t.native||t.romaji||t.english||'（無標題）';}
+function subOf(e){const t=e.seasons[0].title;return [t.romaji,t.english].filter(x=>x&&x!==titleOf(e)).join(' / ');}
+function aired(s){
+  if(s.status==='FINISHED'||s.status==='CANCELLED')return s.episodes==null?null:s.episodes;
+  if(s.status==='RELEASING'||s.status==='HIATUS'){
+    if(s.next)return s.next.episode-1;
+    return s.type==='MANGA'&&s.episodes!=null?s.episodes:null;
+  }
+  return 0;
+}
+function seasonTag(s){
+  if(s.seasonYear&&s.season)return s.seasonYear+' '+SEASON_ZH[s.season];
+  if(s.start&&s.start.year)return String(s.start.year);
+  return '未定';
+}
+function franchiseState(e){
+  const ss=e.seasons,manga=ss[0].type==='MANGA';
+  if(ss.some(s=>s.status==='RELEASING'))return {k:'live',t:manga?'連載中':'播出中'};
+  if(ss.some(s=>s.status==='HIATUS'))return {k:'hiatus',t:'休刊/暫停中'};
+  if(ss.some(s=>s.status==='NOT_YET_RELEASED'))return {k:'soon',t:manga?'即將連載':'新季待播'};
+  if(ss.every(s=>s.status==='CANCELLED'))return {k:'soon',t:'已取消'};
+  return {k:'done',t:'已完結'};
+}
+function stats(e){
+  let airedT=0,known=true,watched=0;
+  e.seasons.forEach((s,i)=>{
+    const a=aired(s);
+    if(a==null)known=false;else airedT+=a;
+    if(i<e.progress.s)watched+=(s.episodes!=null?s.episodes:(a||0));
+    else if(i===e.progress.s)watched+=e.progress.e;
+  });
+  return {airedT,known,watched,behind:known?Math.max(0,airedT-watched):null};
+}
+function epMax(s){const a=aired(s);return s.episodes!=null?s.episodes:a;}
+function isAllWatched(e){
+  const last=e.seasons.length-1,s=e.seasons[last];
+  return e.progress.s===last&&s.episodes!=null&&e.progress.e>=s.episodes;
+}
+function setProgress(e,si,ep){
+  e.progress={s:si,e:Math.max(0,ep)};
+  e.touchedAt=Date.now();
+  if(e.status==='plan'&&(si>0||ep>0))e.status='watching';
+  if(isAllWatched(e)&&franchiseState(e).k==='done'&&e.status!=='completed'){e.status='completed';toast('全部看完了！已移到「看完」');}
+  if(si===e.seasons.length-1)e.newSeason=false;
+  save();render();
+}
+function plusOne(e){
+  const si=e.progress.s,ep=e.progress.e,cur=e.seasons[si];
+  const a=aired(cur),max=epMax(cur);
+  if(max==null||ep<max){
+    if(a!=null&&ep>=a){toast('下一'+unit(e)+'還沒播出');return;}
+    setProgress(e,si,ep+1);
+  }else if(si+1<e.seasons.length){
+    const nx=e.seasons[si+1];
+    if(aired(nx)===0){toast('下一季還沒開播');return;}
+    setProgress(e,si+1,1);
+  }else toast('已經看到最新一'+unit(e)+'了');
+}
+function fmtAir(ts){
+  const d=new Date(ts*1000);
+  const wd='日一二三四五六'[d.getDay()];
+  const hm=d.toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit',hour12:false});
+  const days=Math.round((d-Date.now())/86400000);
+  const rel=days<=0?'今天':days===1?'明天':days+' 天後';
+  return (d.getMonth()+1)+'/'+d.getDate()+'（'+wd+'）'+hm+'，'+rel;
+}
+function fmtDate(t){const d=new Date(t);return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate();}
+
+/* ---------- add ---------- */
+async function addMedia(id,btn){
+  if(findEntryByMedia(id)){toast('已經在清單裡了');return;}
+  if(btn){btn.disabled=true;btn.textContent='抓取中…';}
+  try{
+    const chain=await buildChain(id);
+    if(chain.some(s=>findEntryByMedia(s.id))){
+      const ex=chain.map(s=>findEntryByMedia(s.id)).find(Boolean);
+      const known=new Set(ex.seasons.map(s=>s.id));
+      chain.forEach(s=>{if(!known.has(s.id))ex.seasons.push(s);});
+      save();render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
+    }else{
+      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
+      save();render();
+      toast('已加入「想看」，共 '+chain.length+(chain[0].type==='MANGA'?' 部':' 季'));
+    }
+    if(btn){btn.textContent='已加入';}
+  }catch(e){netError(e);if(btn){btn.disabled=false;btn.textContent='加入';}}
+}
+
+/* ---------- sync ---------- */
+function setSyncText(t){$('sync').innerHTML=t;}
+function renderSync(){
+  if(syncing)return;
+  const t=state.lastSync?'上次自動更新：'+new Date(state.lastSync).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'還沒更新過';
+  setSyncText(esc(t)+' <button id="syncBtn" type="button">立即更新集數</button>');
+  $('syncBtn').onclick=()=>refreshAll(true);
+}
+async function refreshAll(manual){
+  if(syncing||!state.entries.length){if(manual&&!state.entries.length)toast('清單是空的');return;}
+  syncing=true;setSyncText('正在從 AniList 更新集數與播出狀態…');
+  let newFound=0;
+  try{
+    const ids=[...new Set(state.entries.flatMap(e=>e.seasons.map(s=>s.id)))];
+    const map=new Map();
+    for(let i=0;i<ids.length;i+=50){
+      const d=await gql('query($ids:[Int]){Page(page:1,perPage:50){media(id_in:$ids){'+FIELDS+' '+REL+'}}}',{ids:ids.slice(i,i+50)});
+      d.Page.media.forEach(m=>map.set(m.id,slim(m)));
+    }
+    for(const e of state.entries){
+      e.seasons=e.seasons.map(s=>map.get(s.id)||s);
+      const have=new Set(e.seasons.map(s=>s.id));
+      let last=e.seasons[e.seasons.length-1],guard=0;
+      while(last.sequel&&!have.has(last.sequel)&&guard<5){
+        const x=await fetchOne(last.sequel);e.seasons.push(x);have.add(x.id);last=x;guard++;
+        e.newSeason=true;newFound++;
+      }
+      e.syncedAt=Date.now();
+    }
+    state.lastSync=Date.now();save();
+    toast(newFound?'更新完成，發現 '+newFound+' 個新的一季':'更新完成');
+  }catch(e){netError(e);}
+  syncing=false;render();
+}
+
+/* ---------- render ---------- */
+function stripHTML(e,s,i){
+  const multi=e.seasons.length>1,p=e.progress,u=unit(e);
+  const a=aired(s);
+  const watchedHere=i<p.s?(epMax(s)||0):i===p.s?p.e:0;
+  const open=['RELEASING','HIATUS','NOT_YET_RELEASED'].includes(s.status);
+  const total=s.episodes!=null?s.episodes:Math.max(a||0,watchedHere)+(open?1:0);
+  const name=s.type==='MANGA'?'漫畫':(multi?'第'+(i+1)+'季':(FORMAT_ZH[s.format]||'本篇'));
+  const label='<div class="strip-label"><b>'+esc(name)+'</b><span>'+esc(seasonTag(s))+'</span></div>';
+  let inner;
+  if(total===0||(s.status==='NOT_YET_RELEASED'&&s.episodes==null)){
+    inner='<div class="tbd">尚未開播，集數未公布</div>';
+  }else if(total>52){
+    const pa=a==null?0:Math.min(100,a/total*100),pw=Math.min(100,watchedHere/total*100);
+    inner='<div class="longbar" role="img" aria-label="已看 '+watchedHere+'，已播 '+(a==null?'未知':a)+'，共 '+(s.episodes==null?'未知':s.episodes)+'"><i class="a" style="width:'+pa+'%"></i><i class="w" style="width:'+pw+'%"></i></div>'+
+      '<div class="longnum">看到 '+watchedHere+' ／ 已出 '+(a==null?'?':a)+' ／ 共 '+(s.episodes==null?'?':s.episodes)+' '+u+'</div>';
+  }else{
+    let c='';
+    for(let j=1;j<=total;j++){
+      const w=j<=watchedHere;
+      const isAired=a==null?true:j<=a;
+      const cls=w?'w':isAired?'':'f';
+      const nx=s.next&&j===s.next.episode?' nx':'';
+      c+='<button type="button" class="cell '+cls+nx+'" data-act="cell" data-s="'+i+'" data-e="'+j+'" '+(cls==='f'&&!w?'disabled':'')+' title="'+esc(name)+' 第'+j+u+(w?'（已看）':isAired?'（已播出）':'（還沒播）')+'" aria-label="'+esc(name)+' 第'+j+u+'"></button>';
+    }
+    inner='<div class="cells">'+c+'</div>';
+  }
+  return '<div class="strip-row">'+label+inner+'</div>';
+}
+function whereHTML(e){
+  const st=stats(e),fs=franchiseState(e),p=e.progress,u=unit(e),multi=e.seasons.length>1;
+  let now;
+  if(st.watched===0)now='還沒開始看';
+  else if(p.e===0&&p.s>0)now=(multi?'第<b>'+p.s+'</b>季 ':'')+'看完';
+  else{
+    const s=e.seasons[p.s];
+    now=(multi?'看到 第<b>'+(p.s+1)+'</b>季 ':'看到 ')+'第<b>'+p.e+'</b>'+u;
+    if(s.episodes!=null&&p.e>=s.episodes)now=(multi?'第<b>'+(p.s+1)+'</b>季 ':'')+'看完';
+  }
+  let lag='';
+  if(st.behind>0)lag='<span class="lag">還有 '+st.behind+' '+u+'可以看</span>';
+  else if(st.behind===0&&st.watched>0)lag='<span class="lag ok">'+(fs.k==='done'&&isAllWatched(e)?'全部看完':'已追上最新'+u)+'</span>';
+  else if(st.behind==null&&st.watched>0)lag='<span class="lag ok">已出'+u+'數不明</span>';
+  return '<div class="where"><span class="now">'+now+'</span>'+lag+'</div>';
+}
+function cardHTML(e){
+  const fs=franchiseState(e),first=e.seasons[0],u=unit(e);
+  const st=stats(e);
+  const opts=Object.keys(STATUS).map(k=>'<option value="'+k+'"'+(k===e.status?' selected':'')+'>'+STATUS[k]+'</option>').join('');
+  const nextS=e.seasons.find(s=>s.next);
+  const nextLine=nextS?'<div class="next">下一'+u+'：<b>'+(e.seasons.length>1?'第'+(e.seasons.indexOf(nextS)+1)+'季 ':'')+'第'+nextS.next.episode+u+'</b>，'+esc(fmtAir(nextS.next.airingAt))+'</div>':'';
+  const lastNote=e.notes.length?e.notes[e.notes.length-1]:null;
+  const memo=lastNote?'<div class="memo">'+esc(lastNote.text)+'</div>':'';
+  const totalTxt=e.seasons.length>1?'共 '+e.seasons.length+' 季':'';
+  const epsTxt=st.known?'已出 '+st.airedT+' '+u:'';
+  return '<article class="card" data-key="'+e.key+'">'+
+    '<img class="cover" src="'+esc(first.cover)+'" alt="" loading="lazy" data-act="open">'+
+    '<div class="body">'+
+      '<div class="head"><div style="min-width:0"><h3 class="title" data-act="open">'+esc(titleOf(e))+'</h3><p class="sub">'+esc(subOf(e))+'</p></div>'+
+      '<select class="status-sel" data-act="status" aria-label="我的狀態">'+opts+'</select></div>'+
+      '<div class="facts"><span class="chip '+fs.k+'">'+fs.t+'</span>'+(e.newSeason?'<span class="chip new">新的一季</span>':'')+
+        (totalTxt?'<span>'+totalTxt+'</span>':'')+(epsTxt?'<span>'+epsTxt+'</span>':'')+(e.rating?'<span>我的評分 '+e.rating+'/10</span>':'')+'</div>'+
+      whereHTML(e)+
+      e.seasons.map((s,i)=>stripHTML(e,s,i)).join('')+
+      nextLine+memo+
+      '<div class="actions"><button class="btn primary small" data-act="plus" type="button">+1 '+u+'</button>'+
+      '<button class="btn small" data-act="open" type="button">寫心得'+(e.notes.length?'（'+e.notes.length+'）':'')+'</button></div>'+
+    '</div></article>';
+}
+function sortKey(e){
+  const st=stats(e);
+  const pri=(e.status==='watching'&&st.behind>0)?2:(franchiseState(e).k==='live'?1:0);
+  return [pri,e.touchedAt||0];
+}
+function render(){
+  const counts={all:state.entries.length};
+  Object.keys(STATUS).forEach(k=>counts[k]=state.entries.filter(e=>e.status===k).length);
+  $('tabs').innerHTML=TABS.map(([k,t])=>'<button role="tab" type="button" data-tab="'+k+'" aria-selected="'+(k===tab)+'">'+t+'<span class="n">'+counts[k]+'</span></button>').join('');
+  const watching=state.entries.filter(e=>e.status==='watching');
+  const behind=watching.reduce((n,e)=>n+(stats(e).behind||0),0);
+  const live=state.entries.filter(e=>franchiseState(e).k==='live'&&e.status!=='dropped').length;
+  $('tally').innerHTML='<div><b>'+watching.length+'</b><span>部在看</span></div><div class="hot"><b>'+behind+'</b><span>集還沒看</span></div><div><b>'+live+'</b><span>部播出中</span></div>';
+  let list=state.entries.filter(e=>tab==='all'||e.status===tab);
+  list.sort((a,b)=>{const ka=sortKey(a),kb=sortKey(b);return kb[0]-ka[0]||kb[1]-ka[1];});
+  if(!list.length){
+    $('list').innerHTML=state.entries.length
+      ?'<div class="empty"><p>這個分類目前沒有作品。</p></div>'
+      :'<div class="empty"><p>清單還是空的。在上面搜尋片名，或從每季新番一鍵加入。</p><button class="btn primary" type="button" data-act="season">瀏覽本季新番</button></div>';
+  }else $('list').innerHTML=list.map(cardHTML).join('');
+  renderSync();
+  if(openKey&&$('detail').open)renderDetail();
+}
+
+/* ---------- detail dialog ---------- */
+function renderDetail(){
+  const e=getEntry(openKey);if(!e){$('detail').close();return;}
+  const first=e.seasons[0],u=unit(e),p=e.progress;
+  const multi=e.seasons.length>1;
+  const opts=Object.keys(STATUS).map(k=>'<option value="'+k+'"'+(k===e.status?' selected':'')+'>'+STATUS[k]+'</option>').join('');
+  let rate='<option value="">未評分</option>';for(let i=10;i>=1;i--)rate+='<option value="'+i+'"'+(e.rating==i?' selected':'')+'>'+i+' 分</option>';
+  const seasons=e.seasons.map((s,i)=>{
+    const a=aired(s);const name=s.type==='MANGA'?'漫畫':(multi?'第'+(i+1)+'季':'本篇');
+    const t=s.title.native||s.title.romaji||'';
+    const stTxt={FINISHED:'已完結',RELEASING:s.type==='MANGA'?'連載中':'播出中',NOT_YET_RELEASED:'未開播',CANCELLED:'已取消',HIATUS:'暫停中'}[s.status]||'';
+    const cur=i===p.s?p.e:(i<p.s?(epMax(s)||0):0);
+    return '<div class="season-item"><div><b>'+esc(name)+'</b>　'+esc(t)+
+      '<small>'+esc(seasonTag(s))+'　'+esc(FORMAT_ZH[s.format]||s.format||'')+'　'+stTxt+'　已出 '+(a==null?'?':a)+' ／ 共 '+(s.episodes==null?'?':s.episodes)+' '+u+'</small></div>'+
+      '<div class="setep">看到第<input type="number" min="0" '+(s.episodes!=null?'max="'+s.episodes+'"':'')+' value="'+cur+'" data-season="'+i+'" aria-label="'+esc(name)+'看到第幾'+u+'">'+u+'<button class="btn small" type="button" data-act="setep" data-season="'+i+'">設定</button></div></div>';
+  }).join('');
+  const tagTxt=(multi?'第'+(p.s+1)+'季 ':'')+'第'+p.e+u;
+  const notes=e.notes.slice().reverse().map(n=>'<div class="note"><div class="note-meta"><span>'+esc(fmtDate(n.at))+(n.tag?'　<b>'+esc(n.tag)+'</b>':'')+'</span><button class="note-del" type="button" data-act="delnote" data-id="'+n.id+'">刪除</button></div><div class="note-text">'+esc(n.text)+'</div></div>').join('')||'<p style="color:var(--muted);font-size:14px;margin:6px 0">還沒有心得。看完一集想記點什麼就寫在上面。</p>';
+  $('detailBody').innerHTML=
+    '<div class="dlg-head"><img src="'+esc(first.cover)+'" alt=""><div><h2>'+esc(titleOf(e))+'</h2><p>'+esc(subOf(e))+'</p></div><button class="x" type="button" data-act="close" aria-label="關閉">×</button></div>'+
+    '<div class="field"><label for="dName">顯示名稱（可改成中文片名）</label><input id="dName" value="'+esc(e.customTitle)+'" placeholder="'+esc(first.title.native||first.title.romaji||'')+'"></div>'+
+    '<div class="row2"><div class="field"><label for="dStatus">我的狀態</label><select id="dStatus">'+opts+'</select></div><div class="field"><label for="dRate">評分</label><select id="dRate">'+rate+'</select></div></div>'+
+    '<h3 class="sec">'+(first.type==='MANGA'?'進度':'各季資訊與進度')+'</h3>'+seasons+
+    '<h3 class="sec">心得</h3>'+
+    '<div class="field"><label for="dNote" class="hidden">新心得</label><textarea id="dNote" placeholder="這集的感想、喜歡的角色、伏筆…"></textarea></div>'+
+    '<label class="check"><input type="checkbox" id="dTag" checked>標記在目前進度（'+esc(tagTxt)+'）</label>'+
+    '<button class="btn primary small" type="button" data-act="addnote">新增心得</button>'+
+    '<div style="margin-top:8px">'+notes+'</div>'+
+    '<h3 class="sec">總評</h3>'+
+    '<div class="field"><textarea id="dReview" placeholder="整部作品看完的評價">'+esc(e.review)+'</textarea></div>'+
+    '<div class="dlg-foot"><a href="'+esc(first.url)+'" target="_blank" rel="noopener">在 AniList 查看</a><button class="btn small danger" type="button" data-act="remove">從清單移除</button></div>';
+  $('dName').onchange=ev=>{e.customTitle=ev.target.value.trim();save();render();};
+  $('dStatus').onchange=ev=>{e.status=ev.target.value;e.touchedAt=Date.now();save();render();};
+  $('dRate').onchange=ev=>{e.rating=ev.target.value?+ev.target.value:null;save();render();};
+  let rt;$('dReview').oninput=ev=>{clearTimeout(rt);rt=setTimeout(()=>{e.review=ev.target.value;save();},400);};
+}
+function openDetail(key){
+  openKey=key;const e=getEntry(key);if(e&&e.newSeason){/* keep flag until they reach it */}
+  renderDetail();$('detail').showModal();
+}
+$('detail').addEventListener('click',ev=>{
+  if(ev.target===$('detail')){$('detail').close();return;}
+  const b=ev.target.closest('[data-act]');if(!b)return;
+  const e=getEntry(openKey);if(!e)return;
+  const act=b.dataset.act;
+  if(act==='close')$('detail').close();
+  else if(act==='setep'){
+    const i=+b.dataset.season;const inp=$('detailBody').querySelector('input[data-season="'+i+'"]');
+    let v=parseInt(inp.value,10);if(isNaN(v)||v<0)v=0;
+    const s=e.seasons[i];if(s.episodes!=null&&v>s.episodes)v=s.episodes;
+    setProgress(e,i,v);toast('進度已更新');
+  }else if(act==='addnote'){
+    const ta=$('dNote');const text=ta.value.trim();if(!text){ta.focus();return;}
+    const p=e.progress,multi=e.seasons.length>1;
+    const tag=$('dTag').checked?((multi?'第'+(p.s+1)+'季 ':'')+'第'+p.e+unit(e)):'';
+    e.notes.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),at:Date.now(),tag,text});
+    save();render();toast('心得已儲存');
+  }else if(act==='delnote'){
+    if(!confirm('刪除這則心得？'))return;
+    e.notes=e.notes.filter(n=>n.id!==b.dataset.id);save();render();
+  }else if(act==='remove'){
+    if(!confirm('把「'+titleOf(e)+'」和它的心得從清單移除？'))return;
+    state.entries=state.entries.filter(x=>x!==e);save();$('detail').close();render();
+  }
+});
+$('detail').addEventListener('close',()=>{const r=$('dReview');const e=getEntry(openKey);if(r&&e){e.review=r.value;save();}openKey=null;});
+
+/* ---------- list events ---------- */
+$('list').addEventListener('click',ev=>{
+  const b=ev.target.closest('[data-act]');if(!b)return;
+  if(b.dataset.act==='season'){openSeason();return;}
+  const card=b.closest('.card');if(!card)return;
+  const e=getEntry(card.dataset.key);if(!e)return;
+  const act=b.dataset.act;
+  if(act==='plus')plusOne(e);
+  else if(act==='open')openDetail(e.key);
+  else if(act==='cell'){
+    const si=+b.dataset.s,ej=+b.dataset.e;
+    if(e.progress.s===si&&e.progress.e===ej)setProgress(e,si,ej-1);
+    else setProgress(e,si,ej);
+  }
+});
+$('list').addEventListener('change',ev=>{
+  if(ev.target.dataset.act!=='status')return;
+  const e=getEntry(ev.target.closest('.card').dataset.key);
+  e.status=ev.target.value;e.touchedAt=Date.now();save();render();
+});
+$('tabs').addEventListener('click',ev=>{const b=ev.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;render();});
+
+/* ---------- search ---------- */
+function hitHTML(m){
+  const t=m.title||{};const added=!!findEntryByMedia(m.id);
+  const eps=m.type==='MANGA'?m.chapters:m.episodes;
+  const meta=[FORMAT_ZH[m.format]||m.format,m.seasonYear||(m.startDate&&m.startDate.year)||'',eps?eps+(m.type==='MANGA'?' 話':' 集'):'',{FINISHED:'已完結',RELEASING:'進行中',NOT_YET_RELEASED:'未開播',CANCELLED:'已取消',HIATUS:'暫停'}[m.status]||''].filter(Boolean).join('　');
+  return '<div class="hit"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><div><h4>'+esc(t.native||t.romaji)+'</h4><p>'+esc(t.romaji||'')+'</p><p>'+esc(meta)+'</p></div>'+
+    '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
+}
+$('searchForm').addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const q=$('searchInput').value.trim();if(!q)return;
+  const type=$('searchType').value;
+  const box=$('results');box.classList.remove('hidden');
+  box.innerHTML='<div class="results-head">搜尋中…</div>';
+  try{
+    const d=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
+    const ms=d.Page.media;
+    box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+ms.length+'）</span><button class="btn small" type="button" data-close>關閉</button></div>'+
+      (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。AniList 不收中文片名，請改用日文原名、英文或羅馬拼音。</p>');
+  }catch(e){box.innerHTML='<div class="results-head"><span>搜尋失敗</span><button class="btn small" type="button" data-close>關閉</button></div>';netError(e);}
+});
+$('results').addEventListener('click',ev=>{
+  if(ev.target.closest('[data-close]')){$('results').classList.add('hidden');return;}
+  const b=ev.target.closest('[data-add]');if(b)addMedia(+b.dataset.add,b);
+});
+
+/* ---------- seasonal browser ---------- */
+const SEASONS=['WINTER','SPRING','SUMMER','FALL'];
+let sv=(()=>{const d=new Date();return {y:d.getFullYear(),i:Math.floor(d.getMonth()/3),page:1,items:[],more:false};})();
+async function loadSeason(reset){
+  if(reset){sv.page=1;sv.items=[];}
+  renderSeason(true);
+  try{
+    const d=await gql('query($s:MediaSeason,$y:Int,$p:Int){Page(page:$p,perPage:30){pageInfo{hasNextPage} media(season:$s,seasonYear:$y,type:ANIME,isAdult:false,sort:POPULARITY_DESC){'+FIELDS+'}}}',{s:SEASONS[sv.i],y:sv.y,p:sv.page});
+    sv.items=sv.items.concat(d.Page.media);sv.more=d.Page.pageInfo.hasNextPage;
+  }catch(e){netError(e);}
+  renderSeason(false);
+}
+function renderSeason(loading){
+  const items=sv.items.map(m=>{
+    const t=m.title||{};const added=!!findEntryByMedia(m.id);
+    const fmt=FORMAT_ZH[m.format]||m.format||'';
+    const eps=m.episodes?m.episodes+' 集':'集數未定';
+    return '<div class="sitem"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><h4>'+esc(t.native||t.romaji)+'</h4><p>'+esc(fmt+'　'+eps)+'</p>'+
+      '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
+  }).join('');
+  $('seasonBody').innerHTML='<div class="season-nav"><button class="btn small" type="button" data-nav="-1" aria-label="上一季">‹ 上一季</button><h2>'+sv.y+' 年'+SEASON_ZH[SEASONS[sv.i]]+'季新番</h2><button class="btn small" type="button" data-nav="1" aria-label="下一季">下一季 ›</button><button class="x" type="button" data-close aria-label="關閉">×</button></div>'+
+    '<div class="sgrid">'+items+'</div>'+
+    (loading?'<p style="color:var(--muted)">載入中…</p>':(!sv.items.length?'<p style="color:var(--muted)">這一季目前還沒有資料。</p>':''))+
+    (!loading&&sv.more?'<div style="text-align:center;margin-top:16px"><button class="btn" type="button" data-more>載入更多</button></div>':'');
+}
+function openSeason(){$('seasonDlg').showModal();if(!sv.items.length)loadSeason(true);else renderSeason(false);}
+$('openSeason').onclick=openSeason;
+$('seasonDlg').addEventListener('click',ev=>{
+  if(ev.target===$('seasonDlg')||ev.target.closest('[data-close]')){$('seasonDlg').close();return;}
+  const nav=ev.target.closest('[data-nav]');
+  if(nav){sv.i+=+nav.dataset.nav;if(sv.i<0){sv.i=3;sv.y--;}if(sv.i>3){sv.i=0;sv.y++;}loadSeason(true);return;}
+  if(ev.target.closest('[data-more]')){sv.page++;loadSeason(false);return;}
+  const b=ev.target.closest('[data-add]');if(b)addMedia(+b.dataset.add,b);
+});
+
+/* ---------- backup ---------- */
+$('exportBtn').onclick=()=>{
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const d=new Date();a.download='追番帳備份-'+d.getFullYear()+(d.getMonth()+1+'').padStart(2,'0')+(d.getDate()+'').padStart(2,'0')+'.json';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+$('importInput').onchange=async ev=>{
+  const f=ev.target.files[0];if(!f)return;
+  try{
+    const s=JSON.parse(await f.text());
+    if(!s||!Array.isArray(s.entries))throw 0;
+    if(!confirm('用備份檔取代目前的清單？（目前 '+state.entries.length+' 部，備份 '+s.entries.length+' 部）'))return;
+    state=s;save();render();toast('已匯入 '+s.entries.length+' 部作品');
+  }catch(e){toast('這不是追番帳的備份檔');}
+  ev.target.value='';
+};
+
+/* ---------- start ---------- */
+render();
+if(state.entries.length&&Date.now()-state.lastSync>6*3600*1000)refreshAll(false);
+})();
+</script>
+</body>
+</html>
