@@ -94,6 +94,8 @@ img{max-width:100%}
 .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .chip.live{color:var(--live)} .chip.done{color:var(--done)} .chip.soon,.chip.hiatus{color:var(--soon)}
 .chip.new{color:#fff;background:var(--live);border-color:var(--live)} .chip.new::before{background:#fff}
+button.chip.series{color:var(--watched);background:none;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.series-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--watched);border-radius:10px;padding:10px 14px;font-size:14px}
 .where{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:4px 0 8px}
 .where .now{font-size:17px;font-weight:700}
 .where .now b{font-family:var(--num);font-size:24px;font-weight:700;margin:0 2px}
@@ -262,6 +264,7 @@ let state=load();
 let tab='watching';
 let openKey=null;
 let syncing=false;
+let seriesFilter=null,groups=new Map();
 
 function load(){
   try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.entries))return s;}catch(e){}
@@ -433,8 +436,26 @@ function slim(m){
     season:m.season,seasonYear:m.seasonYear,title:m.title||{},synonyms:m.synonyms||[],
     cover:m.coverImage?m.coverImage.large:'',start:m.startDate||{},
     next:m.nextAiringEpisode||null,url:m.siteUrl,
-    sequel:pick('SEQUEL'),prequel:pick('PREQUEL')
+    sequel:pick('SEQUEL'),prequel:pick('PREQUEL'),
+    seqAll:edges.filter(e=>e.relationType==='SEQUEL'&&e.node.type==='ANIME').map(e=>({id:e.node.id,format:e.node.format})),
+    preAll:edges.filter(e=>e.relationType==='PREQUEL'&&e.node.type==='ANIME').map(e=>({id:e.node.id,format:e.node.format})),
+    rel:edges.filter(e=>e.node.type===m.type&&SERIES_REL.includes(e.relationType)).map(e=>e.node.id)
   };
+}
+const SERIES_REL=['PREQUEL','SEQUEL','PARENT','SIDE_STORY','ALTERNATIVE','SUMMARY','SPIN_OFF'];
+/* TV／網路版才會串成「第幾季」；劇場版、OVA、特別篇各自是一部 */
+const isSeriesFmt=s=>s.type==='MANGA'||ANIME_FMT.includes(s.format);
+/* 找下一季（或上一季）TV：中間如果隔著劇場版，就跳過劇場版繼續找 */
+async function stepTV(x,dir){
+  let f=x;
+  for(let h=0;h<4;h++){
+    if(f[dir])return f[dir];
+    const all=(dir==='sequel'?f.seqAll:f.preAll)||[];
+    const hop=all.find(n=>!ANIME_FMT.includes(n.format));
+    if(!hop)return null;
+    f=await fetchOne(hop.id);
+  }
+  return null;
 }
 async function fetchOne(id){
   const d=await gql('query($id:Int){Media(id:$id){'+FIELDS+' '+REL+'}}',{id});
@@ -442,12 +463,44 @@ async function fetchOne(id){
 }
 async function buildChain(id){
   const cur=await fetchOne(id);
+  if(!isSeriesFmt(cur))return [cur];
   const seen=new Set([cur.id]);
-  const before=[];let p=cur;
-  while(p.prequel&&!seen.has(p.prequel)&&before.length<15){const x=await fetchOne(p.prequel);seen.add(x.id);before.unshift(x);p=x;}
+  const before=[];let p=cur,nx;
+  while(before.length<15&&(nx=await stepTV(p,'prequel'))&&!seen.has(nx)){const x=await fetchOne(nx);seen.add(x.id);before.unshift(x);p=x;}
   const after=[];let n=cur;
-  while(n.sequel&&!seen.has(n.sequel)&&after.length<15){const x=await fetchOne(n.sequel);seen.add(x.id);after.push(x);n=x;}
+  while(after.length<15&&(nx=await stepTV(n,'sequel'))&&!seen.has(nx)){const x=await fetchOne(nx);seen.add(x.id);after.push(x);n=x;}
   return before.concat([cur],after);
+}
+/* 舊版會把劇場版併進 TV 版當「第 N 季」，這裡把它們拆回獨立作品 */
+function splitMovies(){
+  const out=[];
+  for(const e of state.entries.slice()){
+    if(e.seasons.length<2)continue;
+    const bad=e.seasons.filter(x=>!isSeriesFmt(x));
+    if(!bad.length)continue;
+    const keep=e.seasons.filter(isSeriesFmt);
+    const old=e.seasons,ps=e.progress.s,pe=e.progress.e,curId=old[ps]&&old[ps].id;
+    if(keep.length){
+      e.seasons=keep;
+      const idx=keep.findIndex(x=>x.id===curId);
+      if(idx>=0)e.progress={s:idx,e:e.progress.e};
+      else{
+        let k=-1;old.forEach((x,i)=>{if(i<ps&&isSeriesFmt(x))k=keep.indexOf(x);});
+        e.progress=k>=0?{s:k,e:epMax(keep[k])||0}:{s:0,e:0};
+      }
+      changed(e);
+    }
+    bad.forEach(m=>{
+      const i=old.indexOf(m);
+      if(keep.length&&findEntryByMedia(m.id))return;
+      const ep=i<ps?(m.episodes||1):(i===ps?pe:0);
+      const done=m.episodes!=null&&ep>=m.episodes;
+      const ne={key:m.id,seasons:[m],progress:{s:0,e:ep},status:done?'completed':(ep>0?'watching':'plan'),rating:null,review:'',notes:[],customTitle:'',cnTitle:'',cnVer:0,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false};
+      if(keep.length){state.entries.push(ne);changed(ne);out.push(ne);}
+    });
+    if(!keep.length){e.seasons=[bad[0]];changed(e);}
+  }
+  return out.length;
 }
 
 /* ---------- Bangumi（中文片名）+ 繁簡轉換 ---------- */
@@ -708,12 +761,19 @@ async function refreshAll(manual){
       e.seasons=e.seasons.map(s=>map.get(s.id)||s);
       const have=new Set(e.seasons.map(s=>s.id));
       let last=e.seasons[e.seasons.length-1],guard=0;
-      while(last.sequel&&!have.has(last.sequel)&&guard<5){
-        const x=await fetchOne(last.sequel);e.seasons.push(x);have.add(x.id);last=x;guard++;
-        e.newSeason=true;newFound++;
+      if(isSeriesFmt(last)){
+        const hopOk=manual||!e.hopAt||Date.now()-e.hopAt>86400000;
+        let nx=last.sequel||(hopOk?await stepTV(last,'sequel'):null);if(hopOk)e.hopAt=Date.now();
+        while(nx&&!have.has(nx)&&guard<5){
+          const x=await fetchOne(nx);e.seasons.push(x);have.add(x.id);last=x;guard++;
+          e.newSeason=true;newFound++;
+          nx=last.sequel;
+        }
       }
       e.syncedAt=Date.now();
     }
+    const split=splitMovies();
+    if(split)toast('已把 '+split+' 部劇場版／OVA 從 TV 版拆出來，變成獨立作品');
     let filled=0;
     if(manual)setSyncText('正在重新查詢中文片名…');
     const natives=state.entries.filter(e=>manual||e.cnVer!==3).map(e=>e.seasons[0].title&&e.seasons[0].title.native).filter(Boolean);
@@ -790,6 +850,7 @@ function cardHTML(e){
       '<div class="head"><div style="min-width:0"><h3 class="title" data-act="open">'+esc(titleOf(e))+'</h3><p class="sub">'+esc(subOf(e))+'</p></div>'+
       '<select class="status-sel" data-act="status" aria-label="我的狀態">'+opts+'</select></div>'+
       '<div class="facts"><span class="chip '+fs.k+'">'+fs.t+'</span>'+(e.newSeason?'<span class="chip new">新的一季</span>':'')+
+        ((g=>g&&g.members.length>1&&!seriesFilter?'<button class="chip series" type="button" data-act="series" data-series="'+esc(g.id)+'">系列：'+esc(g.name)+'（'+g.members.length+' 部）</button>':'')(groups.get(String(e.key))))+
         (totalTxt?'<span>'+totalTxt+'</span>':'')+(epsTxt?'<span>'+epsTxt+'</span>':'')+(e.rating?'<span>我的評分 '+e.rating+'/10</span>':'')+'</div>'+
       whereHTML(e)+
       e.seasons.map((s,i)=>stripHTML(e,s,i)).join('')+
@@ -803,7 +864,26 @@ function sortKey(e){
   const pri=(e.status==='watching'&&st.behind>0)?2:(franchiseState(e).k==='live'?1:0);
   return [pri,e.touchedAt||0];
 }
+function startNum(e){const d=e.seasons[0].start||{};return (d.year||9999)*10000+(d.month||12)*100+(d.day||31);}
+function seriesGroups(){
+  const id2k=new Map();state.entries.forEach(e=>e.seasons.forEach(x=>id2k.set(x.id,String(e.key))));
+  const par=new Map(state.entries.map(e=>[String(e.key),String(e.key)]));
+  const find=k=>{while(par.get(k)!==k){par.set(k,par.get(par.get(k)));k=par.get(k);}return k;};
+  state.entries.forEach(e=>e.seasons.forEach(x=>(x.rel||[]).forEach(r=>{
+    const k2=id2k.get(r);if(!k2)return;const a=find(String(e.key)),b=find(k2);if(a!==b)par.set(a,b);
+  })));
+  const g=new Map();
+  state.entries.forEach(e=>{const r=find(String(e.key));if(!g.has(r))g.set(r,[]);g.get(r).push(e);});
+  const by=new Map();
+  g.forEach(arr=>{
+    arr.sort((a,b)=>startNum(a)-startNum(b));
+    const info={id:String(arr[0].key),members:arr,name:titleOf(arr[0])};
+    arr.forEach(e=>by.set(String(e.key),info));
+  });
+  return by;
+}
 function render(){
+  groups=seriesGroups();
   const counts={all:state.entries.length};
   Object.keys(STATUS).forEach(k=>counts[k]=state.entries.filter(e=>e.status===k).length);
   $('tabs').innerHTML=TABS.map(([k,t])=>'<button role="tab" type="button" data-tab="'+k+'" aria-selected="'+(k===tab)+'">'+t+'<span class="n">'+counts[k]+'</span></button>').join('');
@@ -811,13 +891,24 @@ function render(){
   const behind=watching.reduce((n,e)=>n+(stats(e).behind||0),0);
   const live=state.entries.filter(e=>franchiseState(e).k==='live'&&e.status!=='dropped').length;
   $('tally').innerHTML='<div><b>'+watching.length+'</b><span>部在看</span></div><div class="hot"><b>'+behind+'</b><span>集還沒看</span></div><div><b>'+live+'</b><span>部播出中</span></div>';
-  let list=state.entries.filter(e=>tab==='all'||e.status===tab);
+  const sg=seriesFilter&&[...groups.values()].find(g=>g.id===seriesFilter);
+  if(!sg)seriesFilter=null;
+  let list=sg?sg.members.slice():state.entries.filter(e=>tab==='all'||e.status===tab);
   list.sort((a,b)=>{const ka=sortKey(a),kb=sortKey(b);return kb[0]-ka[0]||kb[1]-ka[1];});
+  /* 同系列的作品排在一起，依上映順序 */
+  const done=new Set(),ordered=[];
+  list.forEach(e=>{
+    const g=groups.get(String(e.key));
+    if(!g||g.members.length<2){ordered.push(e);return;}
+    if(done.has(g.id))return;done.add(g.id);
+    g.members.forEach(m=>{if(list.includes(m))ordered.push(m);});
+  });
+  list=ordered;
   if(!list.length){
     $('list').innerHTML=state.entries.length
       ?'<div class="empty"><p>這個分類目前沒有作品。</p></div>'
       :'<div class="empty"><p>清單還是空的。在上面搜尋片名，或從每季新番一鍵加入。</p><button class="btn primary" type="button" data-act="season">瀏覽本季新番</button></div>';
-  }else $('list').innerHTML=list.map(cardHTML).join('');
+  }else $('list').innerHTML=(sg?'<div class="series-bar"><span>「'+esc(sg.name)+'」系列，共 '+sg.members.length+' 部</span><button class="btn small" type="button" data-act="clearseries">顯示全部</button></div>':'')+list.map(cardHTML).join('');
   renderSync();
   if(openKey&&$('detail').open)renderDetail();
 }
@@ -903,6 +994,8 @@ $('detail').addEventListener('close',()=>{const r=$('dReview');const e=getEntry(
 $('list').addEventListener('click',ev=>{
   const b=ev.target.closest('[data-act]');if(!b)return;
   if(b.dataset.act==='season'){openSeason();return;}
+  if(b.dataset.act==='series'){seriesFilter=b.dataset.series;render();window.scrollTo({top:$('tabs').offsetTop-10,behavior:'smooth'});return;}
+  if(b.dataset.act==='clearseries'){seriesFilter=null;render();return;}
   const card=b.closest('.card');if(!card)return;
   const e=getEntry(card.dataset.key);if(!e)return;
   const act=b.dataset.act;
@@ -919,7 +1012,7 @@ $('list').addEventListener('change',ev=>{
   const e=getEntry(ev.target.closest('.card').dataset.key);
   e.status=ev.target.value;e.touchedAt=Date.now();changed(e);render();
 });
-$('tabs').addEventListener('click',ev=>{const b=ev.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;render();});
+$('tabs').addEventListener('click',ev=>{const b=ev.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;seriesFilter=null;render();});
 
 /* ---------- search ---------- */
 function hitHTML(m){
