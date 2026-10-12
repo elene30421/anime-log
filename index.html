@@ -165,6 +165,9 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
 .foot{margin-top:40px;font-size:12.5px;color:var(--muted)}
 .foot a{color:inherit}
 .hidden{display:none !important}
+.auth{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.auth img{width:28px;height:28px;border-radius:50%;background:var(--sunk)}
+.auth .who{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 
 @media (max-width:560px){
   .brand h1{font-size:34px}
@@ -198,6 +201,7 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
       <button type="submit">搜尋</button>
     </form>
     <button class="btn primary" id="openSeason">瀏覽每季新番</button>
+    <div class="auth" id="auth"></div>
   </div>
   <div class="sync" id="sync"></div>
 
@@ -214,7 +218,7 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
   <main class="list" id="list"></main>
 
   <footer class="foot">
-    資料來源：<a href="https://anilist.co" target="_blank" rel="noopener">AniList</a>。紀錄存在這個瀏覽器裡，換電腦或清除瀏覽資料前請先
+    資料來源：<a href="https://anilist.co" target="_blank" rel="noopener">AniList</a>。用 Google 登入後，紀錄會同步到雲端，手機和電腦共用；沒登入時只存在這個瀏覽器裡。也可以
     <button class="btn small" id="exportBtn">匯出備份</button>
     <label class="btn small">匯入備份<input type="file" id="importInput" accept="application/json" hidden></label>
   </footer>
@@ -224,6 +228,19 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
 <dialog id="seasonDlg"><div class="dlg" id="seasonBody"></div></dialog>
 <div class="toast" id="toast" role="status"></div>
 
+<script>
+/* ===== Firebase 設定 =====
+   把 Firebase 後台「專案設定 → 你的應用程式」裡 firebaseConfig 大括號中的內容貼進下面。
+   留空的話，網站照常可用，只是不會出現 Google 登入。 */
+window.FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCF4qITPuXLMMsKSfbhEZ04Wp3S_nGjLl4",
+  authDomain: "anime-log-32943.firebaseapp.com",
+  projectId: "anime-log-32943",
+  storageBucket: "anime-log-32943.firebasestorage.app",
+  messagingSenderId: "786683502778",
+  appId: "1:786683502778:web:4897664879f4a1eb94a283"
+};
+</script>
 <script>
 (function(){
 'use strict';
@@ -248,7 +265,7 @@ let syncing=false;
 
 function load(){
   try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.entries))return s;}catch(e){}
-  return {entries:[],lastSync:0};
+  return {entries:[],lastSync:0,deleted:{}};
 }
 function save(){
   try{localStorage.setItem(KEY,JSON.stringify(state));}
@@ -256,6 +273,122 @@ function save(){
 }
 let toastTimer;
 function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600);}
+
+/* ---------- 雲端同步（Firebase） ---------- */
+const FB='https://www.gstatic.com/firebasejs/13.0.0/';
+const cloud={on:false,user:null,pending:new Set(),timer:null,unsub:null};
+function changed(e){
+  e.updatedAt=Date.now();save();
+  if(cloud.user)push(String(e.key));
+}
+function removed(e){
+  const k=String(e.key);
+  state.entries=state.entries.filter(x=>x!==e);
+  state.deleted=state.deleted||{};state.deleted[k]=Date.now();
+  save();if(cloud.user)push(k);
+}
+function push(k){
+  cloud.pending.add(k);
+  clearTimeout(cloud.timer);cloud.timer=setTimeout(flush,800);
+}
+async function flush(){
+  if(!cloud.user)return;
+  const {doc,setDoc}=cloud.fs;const uid=cloud.user.uid;
+  const keys=[...cloud.pending];cloud.pending.clear();
+  for(const k of keys){
+    const ref=doc(cloud.db,'users',uid,'entries',k);
+    const e=getEntry(k);
+    try{
+      if(e){e.updatedAt=e.updatedAt||Date.now();await setDoc(ref,{json:JSON.stringify(e),updatedAt:e.updatedAt,deleted:false});}
+      else if(state.deleted&&state.deleted[k])await setDoc(ref,{json:'',updatedAt:state.deleted[k],deleted:true});
+    }catch(err){cloud.pending.add(k);toast('雲端同步失敗，稍後會再試');clearTimeout(cloud.timer);cloud.timer=setTimeout(flush,15000);return;}
+  }
+}
+function localStamp(k){const l=getEntry(k);return l?(l.updatedAt||0):((state.deleted||{})[k]||0);}
+function applyRemote(k,r){
+  state.deleted=state.deleted||{};
+  const i=state.entries.findIndex(x=>String(x.key)===k);
+  if(r.deleted){if(i>=0)state.entries.splice(i,1);state.deleted[k]=r.updatedAt;return;}
+  let e;try{e=JSON.parse(r.json);}catch(err){return;}
+  const l=i>=0?state.entries[i]:null;
+  if(l&&(l.syncedAt||0)>(e.syncedAt||0)){e.seasons=l.seasons;e.syncedAt=l.syncedAt;e.newSeason=l.newSeason;if(!e.cnTitle)e.cnTitle=l.cnTitle;}
+  e.updatedAt=r.updatedAt;
+  if(i>=0)state.entries[i]=e;else state.entries.push(e);
+  delete state.deleted[k];
+}
+async function onUser(u){
+  if(cloud.unsub){cloud.unsub();cloud.unsub=null;}
+  cloud.user=u;renderAuth();
+  if(!u)return;
+  const {collection,getDocs,onSnapshot}=cloud.fs;
+  if(state.owner&&state.owner!==u.uid)state={entries:[],lastSync:0,deleted:{}};
+  state.deleted=state.deleted||{};
+  const col=collection(cloud.db,'users',u.uid,'entries');
+  try{
+    const snap=await getDocs(col);
+    const seen=new Set();
+    snap.forEach(d=>{
+      const k=d.id,r=d.data();seen.add(k);
+      const ru=r.updatedAt||0,lu=localStamp(k);
+      if(ru>lu)applyRemote(k,r);else if(lu>ru)cloud.pending.add(k);
+    });
+    state.entries.forEach(e=>{const k=String(e.key);if(!seen.has(k))cloud.pending.add(k);});
+    Object.keys(state.deleted).forEach(k=>{if(!seen.has(k))cloud.pending.add(k);});
+    state.owner=u.uid;save();render();
+    if(cloud.pending.size)flush();
+  }catch(err){toast('讀取雲端紀錄失敗：'+(err.code||err.message));return;}
+  cloud.unsub=onSnapshot(col,snap=>{
+    let ch=false;
+    snap.docChanges().forEach(c=>{
+      if(c.doc.metadata.hasPendingWrites)return;
+      const k=c.doc.id,r=c.doc.data();
+      if((r.updatedAt||0)>localStamp(k)){applyRemote(k,r);ch=true;}
+    });
+    if(ch){save();render();}
+  },()=>{});
+}
+function renderAuth(){
+  const box=$('auth');
+  if(!cloud.on){box.innerHTML='';return;}
+  if(!cloud.user){box.innerHTML='<button class="btn" type="button" id="loginBtn">用 Google 登入同步</button>';$('loginBtn').onclick=login;return;}
+  const u=cloud.user;
+  box.innerHTML=(u.photoURL?'<img src="'+esc(u.photoURL)+'" alt="" referrerpolicy="no-referrer">':'')+
+    '<span class="who" title="'+esc(u.email||'')+'">'+esc(u.displayName||u.email||'已登入')+'</span><button class="btn small" type="button" id="logoutBtn">登出</button>';
+  $('logoutBtn').onclick=logout;
+}
+async function login(){
+  const A=cloud.authLib,p=new A.GoogleAuthProvider();
+  p.setCustomParameters({prompt:'select_account'});
+  try{await A.signInWithPopup(cloud.auth,p);toast('登入成功，紀錄已同步');}
+  catch(e){
+    if(e.code==='auth/popup-blocked'){A.signInWithRedirect(cloud.auth,p);return;}
+    if(e.code==='auth/popup-closed-by-user'||e.code==='auth/cancelled-popup-request')return;
+    if(e.code==='auth/unauthorized-domain'){toast('這個網址還沒加進 Firebase 的「授權網域」');return;}
+    toast('登入失敗：'+(e.code||e.message));
+  }
+}
+async function logout(){
+  if(!confirm('登出後，這台裝置上的紀錄會清掉（雲端上的還在，下次登入會回來）。要登出嗎？'))return;
+  await flush();
+  await cloud.authLib.signOut(cloud.auth);
+  state={entries:[],lastSync:0,deleted:{}};save();render();
+}
+async function initCloud(){
+  const cfg=window.FIREBASE_CONFIG||{};
+  if(!cfg.apiKey)return;
+  try{
+    const [app,auth,fs]=await Promise.all([import(FB+'firebase-app.js'),import(FB+'firebase-auth.js'),import(FB+'firebase-firestore.js')]);
+    const a=app.initializeApp(cfg);
+    cloud.authLib=auth;cloud.auth=auth.getAuth(a);cloud.fs=fs;cloud.db=fs.getFirestore(a);cloud.on=true;
+  }catch(e){toast('雲端同步載入失敗，先使用本機紀錄');return;}
+  renderAuth();
+  await new Promise(res=>{
+    let first=true;
+    cloud.authLib.onAuthStateChanged(cloud.auth,async u=>{
+      try{await onUser(u);}finally{if(first){first=false;res();}}
+    });
+  });
+}
 
 /* ---------- AniList ---------- */
 let queue=Promise.resolve();
@@ -412,7 +545,7 @@ function setProgress(e,si,ep){
   if(e.status==='plan'&&(si>0||ep>0))e.status='watching';
   if(isAllWatched(e)&&franchiseState(e).k==='done'&&e.status!=='completed'){e.status='completed';toast('全部看完了！已移到「看完」');}
   if(si===e.seasons.length-1)e.newSeason=false;
-  save();render();
+  changed(e);render();
 }
 function plusOne(e){
   const si=e.progress.s,ep=e.progress.e,cur=e.seasons[si];
@@ -446,11 +579,11 @@ async function addMedia(id,btn,cn){
       const ex=chain.map(s=>findEntryByMedia(s.id)).find(Boolean);
       const known=new Set(ex.seasons.map(s=>s.id));
       chain.forEach(s=>{if(!known.has(s.id))ex.seasons.push(s);});
-      save();render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
+      changed(ex);render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
     }else{
       const cnTitle=cn||await lookupCn(chain[0]);
       state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnChecked:true,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
-      save();render();
+      changed(state.entries[state.entries.length-1]);render();
       toast('已加入「想看」，共 '+chain.length+(chain[0].type==='MANGA'?' 部':' 季'));
     }
     if(btn){btn.textContent='已加入';}
@@ -621,10 +754,10 @@ function renderDetail(){
     '<h3 class="sec">總評</h3>'+
     '<div class="field"><textarea id="dReview" placeholder="整部作品看完的評價">'+esc(e.review)+'</textarea></div>'+
     '<div class="dlg-foot"><a href="'+esc(first.url)+'" target="_blank" rel="noopener">在 AniList 查看</a><button class="btn small danger" type="button" data-act="remove">從清單移除</button></div>';
-  $('dName').onchange=ev=>{e.customTitle=ev.target.value.trim();save();render();};
-  $('dStatus').onchange=ev=>{e.status=ev.target.value;e.touchedAt=Date.now();save();render();};
-  $('dRate').onchange=ev=>{e.rating=ev.target.value?+ev.target.value:null;save();render();};
-  let rt;$('dReview').oninput=ev=>{clearTimeout(rt);rt=setTimeout(()=>{e.review=ev.target.value;save();},400);};
+  $('dName').onchange=ev=>{e.customTitle=ev.target.value.trim();changed(e);render();};
+  $('dStatus').onchange=ev=>{e.status=ev.target.value;e.touchedAt=Date.now();changed(e);render();};
+  $('dRate').onchange=ev=>{e.rating=ev.target.value?+ev.target.value:null;changed(e);render();};
+  let rt;$('dReview').oninput=ev=>{clearTimeout(rt);rt=setTimeout(()=>{e.review=ev.target.value;changed(e);},400);};
 }
 function openDetail(key){
   openKey=key;const e=getEntry(key);if(e&&e.newSeason){/* keep flag until they reach it */}
@@ -646,16 +779,16 @@ $('detail').addEventListener('click',ev=>{
     const p=e.progress,multi=e.seasons.length>1;
     const tag=$('dTag').checked?((multi?'第'+(p.s+1)+'季 ':'')+'第'+p.e+unit(e)):'';
     e.notes.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),at:Date.now(),tag,text});
-    save();render();toast('心得已儲存');
+    changed(e);render();toast('心得已儲存');
   }else if(act==='delnote'){
     if(!confirm('刪除這則心得？'))return;
-    e.notes=e.notes.filter(n=>n.id!==b.dataset.id);save();render();
+    e.notes=e.notes.filter(n=>n.id!==b.dataset.id);changed(e);render();
   }else if(act==='remove'){
     if(!confirm('把「'+titleOf(e)+'」和它的心得從清單移除？'))return;
-    state.entries=state.entries.filter(x=>x!==e);save();$('detail').close();render();
+    removed(e);$('detail').close();render();
   }
 });
-$('detail').addEventListener('close',()=>{const r=$('dReview');const e=getEntry(openKey);if(r&&e){e.review=r.value;save();}openKey=null;});
+$('detail').addEventListener('close',()=>{const r=$('dReview');const e=getEntry(openKey);if(r&&e&&e.review!==r.value){e.review=r.value;changed(e);}openKey=null;});
 
 /* ---------- list events ---------- */
 $('list').addEventListener('click',ev=>{
@@ -675,7 +808,7 @@ $('list').addEventListener('click',ev=>{
 $('list').addEventListener('change',ev=>{
   if(ev.target.dataset.act!=='status')return;
   const e=getEntry(ev.target.closest('.card').dataset.key);
-  e.status=ev.target.value;e.touchedAt=Date.now();save();render();
+  e.status=ev.target.value;e.touchedAt=Date.now();changed(e);render();
 });
 $('tabs').addEventListener('click',ev=>{const b=ev.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;render();});
 
@@ -740,7 +873,9 @@ $('results').addEventListener('click',async ev=>{
       const id=await bgmToAnilist(it,lastType);
       if(!id){toast('AniList 找不到這部的集數資料，可以試試「改用 AniList 搜尋」');bb.disabled=false;bb.textContent='加入';return;}
       if(findEntryByMedia(id)){toast('已經在清單裡了');bb.textContent='已加入';return;}
-      await addMedia(id,bb,it.name_cn?conv().toTw(it.name_cn):'');
+      const c=conv(),typed=norm(c.toCn(lastQ));
+      const byAlias=bgmAliases(it).some(a=>norm(c.toCn(a))===typed)&&norm(c.toCn(it.name_cn||''))!==typed;
+      await addMedia(id,bb,byAlias?c.toTw(lastQ):(it.name_cn?c.toTw(it.name_cn):''));
     }catch(e){netError(e);bb.disabled=false;bb.textContent='加入';}
     return;
   }
@@ -795,14 +930,22 @@ $('importInput').onchange=async ev=>{
     const s=JSON.parse(await f.text());
     if(!s||!Array.isArray(s.entries))throw 0;
     if(!confirm('用備份檔取代目前的清單？（目前 '+state.entries.length+' 部，備份 '+s.entries.length+' 部）'))return;
-    state=s;save();render();toast('已匯入 '+s.entries.length+' 部作品');
+    const old=state,now=Date.now(),keep=new Set(s.entries.map(e=>String(e.key)));
+    s.owner=old.owner;s.deleted=old.deleted||{};
+    old.entries.forEach(e=>{const k=String(e.key);if(!keep.has(k))s.deleted[k]=now;});
+    s.entries.forEach(e=>{e.updatedAt=now;delete s.deleted[String(e.key)];});
+    state=s;save();render();
+    if(cloud.user){old.entries.forEach(e=>push(String(e.key)));s.entries.forEach(e=>push(String(e.key)));}
+    toast('已匯入 '+s.entries.length+' 部作品');
   }catch(e){toast('這不是追番帳的備份檔');}
   ev.target.value='';
 };
 
 /* ---------- start ---------- */
 render();
-if(state.entries.length&&Date.now()-state.lastSync>6*3600*1000)refreshAll(false);
+Promise.race([initCloud(),sleep(8000)]).catch(()=>{}).then(()=>{
+  if(state.entries.length&&Date.now()-state.lastSync>6*3600*1000)refreshAll(false);
+});
 })();
 </script>
 </body>
