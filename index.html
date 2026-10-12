@@ -446,18 +446,9 @@ function slim(m){
 const SERIES_REL=['PREQUEL','SEQUEL','PARENT','SIDE_STORY','ALTERNATIVE','SUMMARY','SPIN_OFF'];
 /* TV／網路版才會串成「第幾季」；劇場版、OVA、特別篇各自是一部 */
 const isSeriesFmt=s=>s.type==='MANGA'||ANIME_FMT.includes(s.format);
-/* 找下一季（或上一季）TV：中間如果隔著劇場版，就跳過劇場版繼續找 */
-async function stepTV(x,dir){
-  let f=x;
-  for(let h=0;h<4;h++){
-    if(f[dir])return f[dir];
-    const all=(dir==='sequel'?f.seqAll:f.preAll)||[];
-    const hop=all.find(n=>!ANIME_FMT.includes(n.format));
-    if(!hop)return null;
-    f=await fetchOne(hop.id);
-  }
-  return null;
-}
+/* 下一季／上一季：只認 AniList 直接標成續篇的 TV。
+   中間隔著劇場版的（例如青春豬頭的大學篇）算另一部，靠「系列」排在一起 */
+async function stepTV(x,dir){return x[dir]||null;}
 async function fetchOne(id){
   const d=await gql('query($id:Int){Media(id:$id){'+FIELDS+' '+REL+'}}',{id});
   return slim(d.Media);
@@ -500,6 +491,21 @@ function splitMovies(){
       if(keep.length){state.entries.push(ne);changed(ne);out.push(ne);}
     });
     if(!keep.length){e.seasons=[bad[0]];changed(e);}
+  }
+  /* 季與季之間沒有直接續篇關係的，從那裡拆成另一部 */
+  for(const e of state.entries.slice()){
+    const ss=e.seasons;
+    const k=ss.findIndex((x,i)=>i>0&&ss[i-1].sequel!==x.id&&x.prequel!==ss[i-1].id);
+    if(k<1)continue;
+    const tail=ss.slice(k),p=e.progress;
+    e.seasons=ss.slice(0,k);
+    let tp={s:0,e:0},tst='plan';
+    if(p.s>=k){tp={s:p.s-k,e:p.e};tst=e.status;e.progress={s:k-1,e:epMax(e.seasons[k-1])||0};if(e.status==='watching'&&isAllWatched(e))e.status='completed';}
+    e.newSeason=false;
+    if(e.status==='watching'&&isAllWatched(e)&&franchiseState(e).k==='done')e.status='completed';
+    changed(e);
+    const ne={key:tail[0].id,seasons:tail,progress:tp,status:tst,rating:null,review:'',notes:[],customTitle:'',cnTitle:'',cnVer:0,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false};
+    if(!getEntry(ne.key)){state.entries.push(ne);changed(ne);out.push(ne);}
   }
   return out.length;
 }
@@ -764,8 +770,7 @@ async function refreshAll(manual){
       const have=new Set(e.seasons.map(s=>s.id));
       let last=e.seasons[e.seasons.length-1],guard=0;
       if(isSeriesFmt(last)){
-        const hopOk=manual||!e.hopAt||Date.now()-e.hopAt>86400000;
-        let nx=last.sequel||(hopOk?await stepTV(last,'sequel'):null);if(hopOk)e.hopAt=Date.now();
+        let nx=last.sequel;
         while(nx&&!have.has(nx)&&guard<5){
           const x=await fetchOne(nx);e.seasons.push(x);have.add(x.id);last=x;guard++;
           e.newSeason=true;newFound++;
@@ -775,7 +780,7 @@ async function refreshAll(manual){
       e.syncedAt=Date.now();
     }
     const split=splitMovies();
-    if(split)toast('已把 '+split+' 部劇場版／OVA 從 TV 版拆出來，變成獨立作品');
+    if(split)toast('已拆出 '+split+' 部獨立作品（劇場版、續作等）');
     let filled=0;
     if(manual)setSyncText('正在重新查詢中文片名…');
     const natives=state.entries.filter(e=>manual||e.cnVer!==3).map(e=>e.seasons[0].title&&e.seasons[0].title.native).filter(Boolean);
