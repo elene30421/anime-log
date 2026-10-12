@@ -508,7 +508,7 @@ async function wikiTw(names){
       const zhOf=new Map();
       /* 日文片名被轉址到別的條目（例如轉到「〇〇系列」總條目）就不採用，
          否則同系列每一部都會變成同一個名字 */
-      need.forEach(n=>{const pg=rj.redirected(n)?null:pj[rj(n)];const ll=pg&&!pg.pageprops&&pg.langlinks&&pg.langlinks[0];zhOf.set(n,ll?ll['*']:'');});
+      need.forEach(n=>{const pg=(rj.redirected(n)&&norm(rj(n))!==norm(n))?null:pj[rj(n)];const ll=pg&&!pg.pageprops&&pg.langlinks&&pg.langlinks[0];zhOf.set(n,ll?ll['*']:'');});
       const zhs=[...new Set([...zhOf.values()].filter(Boolean))];
       const tw={};
       if(zhs.length){
@@ -593,7 +593,10 @@ async function lookupCn(s){
 function findEntryByMedia(id){return state.entries.find(e=>e.seasons.some(s=>s.id===id));}
 function getEntry(key){return state.entries.find(e=>String(e.key)===String(key));}
 function unit(e){return e.seasons[0].type==='MANGA'?'話':'集';}
-function titleOf(e){const t=e.seasons[0].title;return e.customTitle||e.cnTitle||t.native||t.romaji||t.english||'（無標題）';}
+/* 沒有中文名時：日文名有漢字就用日文名；全是假名的（例如 ラブライブ！）改用英文或羅馬拼音，比較看得懂 */
+function readable(t){t=t||{};return (t.native&&hasHan(t.native))?t.native:(t.english||t.romaji||t.native||'');}
+function aniName(m){const t=m.title||{};return wikiCache.get(t.native)||readable(t);}
+function titleOf(e){const t=e.seasons[0].title;return e.customTitle||e.cnTitle||readable(t)||'（無標題）';}
 function subOf(e){const t=e.seasons[0].title;const main=titleOf(e);return [t.native,t.romaji].filter(x=>x&&x!==main).join(' / ');}
 function aired(s){
   if(s.status==='FINISHED'||s.status==='CANCELLED')return s.episodes==null?null:s.episodes;
@@ -923,19 +926,20 @@ function hitHTML(m){
   const t=m.title||{};const added=!!findEntryByMedia(m.id);
   const eps=m.type==='MANGA'?m.chapters:m.episodes;
   const meta=[FORMAT_ZH[m.format]||m.format,m.seasonYear||(m.startDate&&m.startDate.year)||'',eps?eps+(m.type==='MANGA'?' 話':' 集'):'',{FINISHED:'已完結',RELEASING:'進行中',NOT_YET_RELEASED:'未開播',CANCELLED:'已取消',HIATUS:'暫停'}[m.status]||''].filter(Boolean).join('　');
-  return '<div class="hit"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><div><h4>'+esc(t.native||t.romaji)+'</h4><p>'+esc(t.romaji||'')+'</p><p>'+esc(meta)+'</p></div>'+
+  return '<div class="hit"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><div><h4>'+esc(aniName(m))+'</h4><p>'+esc([t.native,t.romaji].filter(x=>x&&x!==aniName(m)).join(' / '))+'</p><p>'+esc(meta)+'</p></div>'+
     '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
 }
-let bgmHits=[];
+let bgmHits=[],aniTok=null;
 let lastQ='',lastType='ANIME',pendingCn='';
 function bgmHitHTML(it,i){
   const c=conv();
   const cn=pickCn(it,lastQ,true);
   const mainCn=it.name_cn?c.toTw(it.name_cn):'';
+  const head=cn||(hasHan(it.name)?it.name:(bgmAliases(it).find(a=>/^[\x20-\x7e]+$/.test(a))||it.name));
   const img=it.images?(it.images.common||it.images.large||it.images.medium):'';
   const al=bgmAliases(it).filter(a=>a!==it.name_cn&&a!==it.name).map(c.toTw).filter(a=>a!==cn).slice(0,3);
   const meta=[it.platform,it.date?it.date.slice(0,4):'',it.eps?it.eps+(lastType==='MANGA'?' 話':' 集'):''].filter(Boolean).join('　');
-  return '<div class="hit"><img src="'+esc(img)+'" alt="" loading="lazy"><div><h4>'+esc(cn||it.name)+'</h4><p>'+esc(cn?it.name:'')+'</p>'+(mainCn&&mainCn!==cn?'<p>中國譯名：'+esc(mainCn)+'</p>':'')+
+  return '<div class="hit"><img src="'+esc(img)+'" alt="" loading="lazy"><div><h4>'+esc(head)+'</h4><p>'+esc(head!==it.name?it.name:'')+'</p>'+(mainCn&&mainCn!==cn?'<p>中國譯名：'+esc(mainCn)+'</p>':'')+
     (al.length?'<p>別名：'+esc(al.join('、'))+'</p>':'')+'<p>'+esc(meta)+'</p></div>'+
     '<button class="btn small primary" type="button" data-bgm="'+i+'">加入</button></div>';
 }
@@ -944,8 +948,10 @@ async function searchAnilist(q,type,note){
   const box=$('results');
   const d=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
   const ms=d.Page.media;
-  box.innerHTML='<div class="results-head"><span>'+(note?esc(note)+'　':'')+'AniList 搜尋「'+esc(q)+'」（'+ms.length+'）</span>'+closeBtn()+'</div>'+
-    (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。可以改打片名的其中幾個字，或換成日文、英文片名。</p>');
+  const draw=()=>{box.innerHTML='<div class="results-head"><span>'+(note?esc(note)+'　':'')+'AniList 搜尋「'+esc(q)+'」（'+ms.length+'）</span>'+closeBtn()+'</div>'+
+    (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。可以改打片名的其中幾個字，或換成日文、英文片名。</p>');};
+  draw();
+  if(ms.length){const tok=Symbol();aniTok=tok;await wikiTw(ms.map(m=>m.title&&m.title.native));if(aniTok===tok)draw();}
 }
 $('searchForm').addEventListener('submit',async ev=>{
   ev.preventDefault();
@@ -1009,13 +1015,17 @@ async function loadSeason(reset){
     sv.items=sv.items.concat(d.Page.media);sv.more=d.Page.pageInfo.hasNextPage;
   }catch(e){netError(e);}
   renderSeason(false);
+  const items=sv.items;
+  await wikiTw(d0(items));
+  if(sv.items===items&&$('seasonDlg').open)renderSeason(false);
 }
+function d0(items){return items.map(m=>m.title&&m.title.native).filter(Boolean).slice(-30);}
 function renderSeason(loading){
   const items=sv.items.map(m=>{
     const t=m.title||{};const added=!!findEntryByMedia(m.id);
     const fmt=FORMAT_ZH[m.format]||m.format||'';
     const eps=m.episodes?m.episodes+' 集':'集數未定';
-    return '<div class="sitem"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><h4>'+esc(t.native||t.romaji)+'</h4><p>'+esc(fmt+'　'+eps)+'</p>'+
+    return '<div class="sitem"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><h4>'+esc(aniName(m))+'</h4><p>'+esc(fmt+'　'+eps)+'</p>'+
       '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
   }).join('');
   $('seasonBody').innerHTML='<div class="season-nav"><button class="btn small" type="button" data-nav="-1" aria-label="上一季">‹ 上一季</button><h2>'+sv.y+' 年'+SEASON_ZH[SEASONS[sv.i]]+'季新番</h2><button class="btn small" type="button" data-nav="1" aria-label="下一季">下一季 ›</button><button class="x" type="button" data-close aria-label="關閉">×</button></div>'+
