@@ -683,7 +683,7 @@ function setSyncText(t){$('sync').innerHTML=t;}
 function renderSync(){
   if(syncing)return;
   const t=state.lastSync?'上次自動更新：'+new Date(state.lastSync).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'還沒更新過';
-  setSyncText(esc(t)+' <button id="syncBtn" type="button">立即更新集數</button>');
+  setSyncText(esc(t)+' <button id="syncBtn" type="button">立即更新集數與片名</button>');
   $('syncBtn').onclick=()=>refreshAll(true);
 }
 async function refreshAll(manual){
@@ -708,9 +708,13 @@ async function refreshAll(manual){
       e.syncedAt=Date.now();
     }
     let filled=0;
+    if(manual)setSyncText('正在重新查詢中文片名…');
+    const natives=state.entries.filter(e=>manual||e.cnVer!==3).map(e=>e.seasons[0].title&&e.seasons[0].title.native).filter(Boolean);
+    if(natives.length)await wikiTw(natives);
     for(const e of state.entries){
-      if(e.cnVer===3||filled>=10)continue;
-      const t=await lookupCn(e.seasons[0]);if(t)e.cnTitle=t;e.cnVer=3;filled++;
+      if((!manual&&e.cnVer===3)||filled>=(manual?200:10))continue;
+      const t=await lookupCn(e.seasons[0]);filled++;
+      if(t&&t!==e.cnTitle){e.cnTitle=t;e.cnVer=3;changed(e);}else e.cnVer=3;
     }
     state.lastSync=Date.now();save();
     toast(newFound?'更新完成，發現 '+newFound+' 個新的一季':'更新完成');
@@ -831,7 +835,7 @@ function renderDetail(){
   const notes=e.notes.slice().reverse().map(n=>'<div class="note"><div class="note-meta"><span>'+esc(fmtDate(n.at))+(n.tag?'　<b>'+esc(n.tag)+'</b>':'')+'</span><button class="note-del" type="button" data-act="delnote" data-id="'+n.id+'">刪除</button></div><div class="note-text">'+esc(n.text)+'</div></div>').join('')||'<p style="color:var(--muted);font-size:14px;margin:6px 0">還沒有心得。看完一集想記點什麼就寫在上面。</p>';
   $('detailBody').innerHTML=
     '<div class="dlg-head"><img src="'+esc(first.cover)+'" alt=""><div><h2>'+esc(titleOf(e))+'</h2><p>'+esc(subOf(e))+'</p></div><button class="x" type="button" data-act="close" aria-label="關閉">×</button></div>'+
-    '<div class="field"><label for="dName">自訂顯示名稱（留空就用自動抓到的中文名）</label><input id="dName" value="'+esc(e.customTitle)+'" placeholder="'+esc(e.cnTitle||first.title.native||first.title.romaji||'')+'"></div>'+
+    '<div class="field"><label for="dName">自訂顯示名稱（留空就用自動抓到的中文名）</label><input id="dName" value="'+esc(e.customTitle)+'" placeholder="'+esc(e.cnTitle||first.title.native||first.title.romaji||'')+'"><button class="btn small" type="button" data-act="refetchname" style="align-self:flex-start;margin-top:4px">重新抓中文片名</button></div>'+
     '<div class="row2"><div class="field"><label for="dStatus">我的狀態</label><select id="dStatus">'+opts+'</select></div><div class="field"><label for="dRate">評分</label><select id="dRate">'+rate+'</select></div></div>'+
     '<h3 class="sec">'+(first.type==='MANGA'?'進度':'各季資訊與進度')+'</h3>'+seasons+
     '<h3 class="sec">心得</h3>'+
@@ -862,6 +866,16 @@ $('detail').addEventListener('click',ev=>{
     let v=parseInt(inp.value,10);if(isNaN(v)||v<0)v=0;
     const s=e.seasons[i];if(s.episodes!=null&&v>s.episodes)v=s.episodes;
     setProgress(e,i,v);toast('進度已更新');
+  }else if(act==='refetchname'){
+    b.disabled=true;b.textContent='查詢中…';
+    const n=e.seasons[0].title&&e.seasons[0].title.native;
+    if(n)wikiCache.delete(n);
+    lookupCn(e.seasons[0]).then(t=>{
+      if(!t){toast('找不到中文片名，維持原本名稱');b.disabled=false;b.textContent='重新抓中文片名';return;}
+      e.cnTitle=t;e.cnVer=3;
+      if(e.customTitle&&e.customTitle!==t&&confirm('抓到「'+t+'」。要清掉你自訂的「'+e.customTitle+'」改用這個嗎？'))e.customTitle='';
+      changed(e);render();toast('已更新為「'+titleOf(e)+'」');
+    });
   }else if(act==='addnote'){
     const ta=$('dNote');const text=ta.value.trim();if(!text){ta.focus();return;}
     const p=e.progress,multi=e.seasons.length>1;
