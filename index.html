@@ -189,7 +189,7 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
   <header class="top">
     <div class="brand">
       <h1>追番帳</h1>
-      <p>中文片名來自 Bangumi，集數與播出時間來自 AniList，你只需要點你看到哪一集。</p>
+      <p>台灣譯名來自維基百科與 Bangumi，集數與播出時間來自 AniList，你只需要點你看到哪一集。</p>
     </div>
     <div class="tally" id="tally"></div>
   </header>
@@ -480,34 +480,108 @@ const hasKana=s=>/[぀-ヿ]/.test(s);
 /* 選顯示用的中文名：1. 你搜尋時打的字剛好是別名 → 用你打的；
    2. 別名裡有繁體字寫的中文名（通常是台灣/港澳譯名）→ 用第一個；
    3. 都沒有 → 用 Bangumi 的主要中文名（中國譯名，轉繁體） */
-function pickCn(it,q){
+/* ---------- 維基百科：查台灣譯名 ----------
+   日文片名 → 日文維基條目 → 對應的中文維基條目 → 該條目的「台灣正體」標題。
+   中文維基會為台灣、香港、中國分別設定標題，所以能分辨台灣和香港譯名。 */
+const wikiCache=new Map();
+async function wikiApi(lang,params){
+  const u='https://'+lang+'.wikipedia.org/w/api.php?'+new URLSearchParams(Object.assign({action:'query',format:'json',formatversion:'1',origin:'*',redirects:'1'},params));
+  const r=await fetch(u);if(!r.ok)throw new Error('WIKI');
+  return (await r.json()).query||{};
+}
+function wikiResolver(q){
+  const m=new Map();
+  (q.normalized||[]).forEach(x=>m.set(x.from,x.to));
+  const r=new Map();(q.redirects||[]).forEach(x=>r.set(x.from,x.to));
+  return t=>{let x=m.get(t)||t;return r.get(x)||x;};
+}
+const wikiClean=t=>String(t||'').replace(/\s*[（(][^（）()]*[)）]\s*$/,'').trim();
+async function wikiTw(names){
+  const need=[...new Set(names.filter(n=>n&&!wikiCache.has(n)))].slice(0,40);
+  if(need.length){
+    try{
+      const ja=await wikiApi('ja',{prop:'langlinks|pageprops',lllang:'zh',lllimit:'max',ppprop:'disambiguation',titles:need.join('|')});
+      const rj=wikiResolver(ja),pj={};
+      Object.values(ja.pages||{}).forEach(pg=>pj[pg.title]=pg);
+      const zhOf=new Map();
+      need.forEach(n=>{const pg=pj[rj(n)];const ll=pg&&!pg.pageprops&&pg.langlinks&&pg.langlinks[0];zhOf.set(n,ll?ll['*']:'');});
+      const zhs=[...new Set([...zhOf.values()].filter(Boolean))];
+      const tw={};
+      if(zhs.length){
+        const zh=await wikiApi('zh',{prop:'info',inprop:'varianttitles',titles:zhs.join('|')});
+        const rz=wikiResolver(zh),pz={};
+        Object.values(zh.pages||{}).forEach(pg=>pz[pg.title]=pg);
+        zhs.forEach(z=>{const pg=pz[rz(z)];tw[z]=pg&&pg.varianttitles?(pg.varianttitles['zh-tw']||''):'';});
+      }
+      need.forEach(n=>{const z=zhOf.get(n);wikiCache.set(n,z&&tw[z]?wikiClean(tw[z]):'');});
+    }catch(e){}
+  }
+  return new Map(names.filter(n=>wikiCache.has(n)).map(n=>[n,wikiCache.get(n)]));
+}
+const SEASON_SUFFIX=/\s*(第[一二三四五六七八九十0-9]+[季期部]|最[终終]季|完[结結][篇章]|[续續]篇|[ⅡⅢⅣⅤ]|\s[2-9])$/;
+/* 選顯示用的中文名：
+   1. 你搜尋時打的字剛好是別名 → 用你打的
+   2. 維基百科的台灣譯名
+   3. 別名裡用繁體字寫的中文名
+   4. Bangumi 的主要中文名（中國譯名，轉繁體）
+   withSeason：搜尋結果裡要分得出第幾季，會把「第二季」之類的字補回去 */
+function pickCn(it,q,withSeason){
   const c=conv(),al=bgmAliases(it);
   if(q){
     const t=norm(c.toCn(q));
     if(t&&al.concat(it.name_cn||'').some(a=>norm(c.toCn(a))===t)&&norm(c.toCn(it.name_cn||''))!==t)return c.toTw(q);
   }
+  const w=wikiCache.get(it.name);
+  if(w){
+    if(!withSeason)return w;
+    const m=(it.name_cn||'').match(SEASON_SUFFIX);
+    return m&&!w.endsWith(c.toTw(m[1].trim()))?w+' '+c.toTw(m[1].trim()):w;
+  }
   const tw=al.find(a=>hasHan(a)&&!hasKana(a)&&a!==it.name&&c.toCn(a)!==a&&norm(c.toCn(a))!==norm(c.toCn(it.name_cn||'')));
   if(tw)return tw;
   return it.name_cn?c.toTw(it.name_cn):'';
 }
+/* Bangumi 作品 → AniList 作品。回傳 {id} 或 {cands:[候選清單]}。
+   1. 用開播日期前後幾天去 AniList 撈，比對日文原名（不靠 AniList 的文字搜尋，最準）
+   2. 用日文原名、羅馬拼音/英文別名搜尋，比對名稱和年份
+   3. 都對不上 → 回傳候選讓使用者自己選 */
 async function bgmToAnilist(it,type){
-  const n=it.name;if(!n)return null;
+  const n=it.name||'';
+  const want=new Set([n,...bgmAliases(it)].map(norm).filter(Boolean));
   const year=it.date?parseInt(it.date.slice(0,4),10):null;
-  const d=await gql('query($q:String,$t:MediaType){Page(perPage:8){media(search:$q,type:$t,sort:SEARCH_MATCH){id title{native romaji} startDate{year}}}}',{q:n,t:type});
-  const ms=d.Page.media;if(!ms.length)return null;
-  const exact=ms.filter(m=>norm(m.title.native)===norm(n));
-  const pool=exact.length?exact:ms;
-  const byYear=year?pool.find(m=>m.startDate&&m.startDate.year===year):null;
-  if(byYear)return byYear.id;
-  return exact.length?exact[0].id:(year?null:ms[0].id);
+  const names=m=>[m.title&&m.title.native,m.title&&m.title.romaji,m.title&&m.title.english,...(m.synonyms||[])].filter(Boolean);
+  const nameHit=m=>names(m).some(x=>want.has(norm(x)));
+  const head=norm(n).slice(0,5);
+  const nearYear=m=>!year||!m.startDate||!m.startDate.year||Math.abs(m.startDate.year-year)<=1;
+  const pool=new Map();
+  if(it.date&&/^\d{4}-\d{2}-\d{2}/.test(it.date)){
+    const d=new Date(it.date.slice(0,10)+'T00:00:00Z');
+    const f=x=>{const t=new Date(d.getTime()+x*86400000);return +(t.getUTCFullYear()+String(t.getUTCMonth()+1).padStart(2,'0')+String(t.getUTCDate()).padStart(2,'0'));};
+    const r=await gql('query($a:FuzzyDateInt,$b:FuzzyDateInt,$t:MediaType){Page(perPage:50){media(type:$t,startDate_greater:$a,startDate_lesser:$b,sort:POPULARITY_DESC){'+FIELDS+'}}}',{a:f(-8),b:f(8),t:type});
+    const ms=r.Page.media;
+    const hit=ms.find(nameHit)||(head.length>=3?ms.find(m=>names(m).some(x=>norm(x).startsWith(head))):null);
+    if(hit)return {id:hit.id};
+  }
+  const qs=[n,...bgmAliases(it).filter(a=>/^[\x20-\x7e]+$/.test(a))].filter(Boolean).slice(0,3);
+  for(const q of qs){
+    const r=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
+    const ms=r.Page.media;
+    ms.forEach(m=>{if(!pool.has(m.id))pool.set(m.id,m);});
+    const hit=ms.find(m=>nameHit(m)&&nearYear(m));
+    if(hit)return {id:hit.id};
+  }
+  return {cands:[...pool.values()].slice(0,10)};
 }
 async function lookupCn(s){
   const n=s.title&&s.title.native;if(!n)return '';
+  const w=(await wikiTw([n])).get(n);if(w)return w;
   try{
     const r=await bgmSearch(n,s.type);
     const y=s.start&&s.start.year;
     const hit=r.find(x=>norm(x.name)===norm(n))||r.find(x=>y&&x.date&&+x.date.slice(0,4)===y&&norm(x.name).includes(norm(n).slice(0,4)));
-    return hit?pickCn(hit,''):'';
+    if(!hit)return '';
+    await wikiTw([hit.name]);
+    return pickCn(hit,'');
   }catch(e){return '';}
 }
 
@@ -596,7 +670,7 @@ async function addMedia(id,btn,cn){
       changed(ex);render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
     }else{
       const cnTitle=cn||await lookupCn(chain[0]);
-      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnVer:2,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
+      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnVer:3,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
       changed(state.entries[state.entries.length-1]);render();
       toast('已加入「想看」，共 '+chain.length+(chain[0].type==='MANGA'?' 部':' 季'));
     }
@@ -635,8 +709,8 @@ async function refreshAll(manual){
     }
     let filled=0;
     for(const e of state.entries){
-      if(e.cnVer===2||filled>=10)continue;
-      const t=await lookupCn(e.seasons[0]);if(t)e.cnTitle=t;e.cnVer=2;filled++;
+      if(e.cnVer===3||filled>=10)continue;
+      const t=await lookupCn(e.seasons[0]);if(t)e.cnTitle=t;e.cnVer=3;filled++;
     }
     state.lastSync=Date.now();save();
     toast(newFound?'更新完成，發現 '+newFound+' 個新的一季':'更新完成');
@@ -835,10 +909,10 @@ function hitHTML(m){
     '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
 }
 let bgmHits=[];
-let lastQ='',lastType='ANIME';
+let lastQ='',lastType='ANIME',pendingCn='';
 function bgmHitHTML(it,i){
   const c=conv();
-  const cn=pickCn(it,lastQ);
+  const cn=pickCn(it,lastQ,true);
   const mainCn=it.name_cn?c.toTw(it.name_cn):'';
   const img=it.images?(it.images.common||it.images.large||it.images.medium):'';
   const al=bgmAliases(it).filter(a=>a!==it.name_cn&&a!==it.name).map(c.toTw).filter(a=>a!==cn).slice(0,3);
@@ -858,7 +932,7 @@ async function searchAnilist(q,type,note){
 $('searchForm').addEventListener('submit',async ev=>{
   ev.preventDefault();
   const q=$('searchInput').value.trim();if(!q)return;
-  const type=$('searchType').value;lastQ=q;lastType=type;
+  const type=$('searchType').value;lastQ=q;lastType=type;pendingCn='';
   const box=$('results');box.classList.remove('hidden');
   box.innerHTML='<div class="results-head">搜尋中…</div>';
   try{
@@ -868,16 +942,20 @@ $('searchForm').addEventListener('submit',async ev=>{
     catch(e){await searchAnilist(q,type,'中文資料庫暫時連不上，改用');return;}
     if(!hits.length&&conv().toCn(q)!==q){try{hits=await bgmSearch(q,type);}catch(e){hits=[];}}
     bgmHits=hits;
-    box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+hits.length+'）</span>'+closeBtn()+'</div>'+
+    const draw=()=>{box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+hits.length+'）</span>'+closeBtn()+'</div>'+
       (hits.length?hits.map(bgmHitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。試試只打片名的其中兩三個字，或改打中國譯名、日文片名。</p>')+
-      '<p style="font-size:13px;color:var(--muted);margin:10px 0 6px">不是你要的？<button class="btn small" type="button" data-anilist>改用 AniList 搜尋</button></p>';
+      '<p style="font-size:13px;color:var(--muted);margin:10px 0 6px">不是你要的？<button class="btn small" type="button" data-anilist>改用 AniList 搜尋</button></p>';};
+    draw();
+    if(hits.length){const tok=q;await wikiTw(hits.map(h=>h.name));if(lastQ===tok&&bgmHits===hits)draw();}
   }catch(e){box.innerHTML='<div class="results-head"><span>搜尋失敗</span>'+closeBtn()+'</div>';netError(e);}
 });
 $('results').addEventListener('click',async ev=>{
   if(ev.target.closest('[data-close]')){$('results').classList.add('hidden');return;}
   if(ev.target.closest('[data-anilist]')){
     $('results').innerHTML='<div class="results-head">搜尋中…</div>';
-    try{await searchAnilist(lastQ,lastType);}catch(e){netError(e);}
+    pendingCn='';
+    const q=hasHan(lastQ)&&bgmHits[0]&&bgmHits[0].name?bgmHits[0].name:lastQ;
+    try{await searchAnilist(q,lastType);}catch(e){netError(e);}
     return;
   }
   const bb=ev.target.closest('[data-bgm]');
@@ -885,14 +963,21 @@ $('results').addEventListener('click',async ev=>{
     const it=bgmHits[+bb.dataset.bgm];if(!it)return;
     bb.disabled=true;bb.textContent='對應中…';
     try{
-      const id=await bgmToAnilist(it,lastType);
-      if(!id){toast('AniList 找不到這部的集數資料，可以試試「改用 AniList 搜尋」');bb.disabled=false;bb.textContent='加入';return;}
-      if(findEntryByMedia(id)){toast('已經在清單裡了');bb.textContent='已加入';return;}
-      await addMedia(id,bb,pickCn(it,lastQ));
+      const r=await bgmToAnilist(it,lastType);
+      await wikiTw([it.name]);
+      const cn=pickCn(it,lastQ);
+      if(!r.id){
+        pendingCn=cn;
+        $('results').innerHTML='<div class="results-head"><span>沒辦法自動對應「'+esc(cn||it.name)+'」，請從下面選出同一部</span>'+closeBtn()+'</div>'+
+          (r.cands.length?r.cands.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">AniList 上找不到這部作品，可能是太新或太冷門，還沒有集數資料。</p>');
+        return;
+      }
+      if(findEntryByMedia(r.id)){toast('已經在清單裡了');bb.textContent='已加入';return;}
+      await addMedia(r.id,bb,cn);
     }catch(e){netError(e);bb.disabled=false;bb.textContent='加入';}
     return;
   }
-  const b=ev.target.closest('[data-add]');if(b)addMedia(+b.dataset.add,b);
+  const b=ev.target.closest('[data-add]');if(b)addMedia(+b.dataset.add,b,pendingCn||undefined);
 });
 
 /* ---------- seasonal browser ---------- */
