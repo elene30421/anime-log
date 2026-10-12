@@ -420,6 +420,7 @@ function gql(query,variables){
 }
 function netError(e){
   if(e.message==='NETWORK')toast('連不上 AniList。請確認網路，或下載此檔案後直接用瀏覽器開啟');
+  else if(e.message==='BGM')toast('中文資料庫（Bangumi）暫時連不上，請稍後再試');
   else if(e.message==='RATE')toast('AniList 暫時拒絕請求，請過幾分鐘再試');
   else toast('AniList 回傳錯誤：'+e.message);
 }
@@ -504,7 +505,7 @@ function splitMovies(){
 }
 
 /* ---------- Bangumi（中文片名）+ 繁簡轉換 ---------- */
-const BGM='https://api.bgm.tv/v0/search/subjects?limit=12';
+const BGM='https://api.bgm.tv/v0/search/subjects';
 const cvt={toCn:s=>s,toTw:s=>s,ok:false};
 function conv(){
   if(!cvt.ok&&window.OpenCC){
@@ -514,15 +515,16 @@ function conv(){
 }
 const norm=s=>String(s||'').normalize('NFKC').replace(/[\s・·:：!！?？、,，.。'"「」『』\-~〜♪☆★]/g,'').toLowerCase();
 const hasHan=s=>/[\u3400-\u9fff]/.test(s);
-async function bgmSearch(q,type){
+async function bgmSearch(q,type,offset){
   let res;
   try{
-    res=await fetch(BGM,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+    res=await fetch(BGM+'?limit=20&offset='+(offset||0),{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
       body:JSON.stringify({keyword:q,sort:'match',filter:{type:[type==='MANGA'?1:2],nsfw:false}})});
   }catch(e){throw new Error('BGM');}
   if(!res.ok)throw new Error('BGM');
   const j=await res.json();
-  return j.data||[];
+  const arr=j.data||[];arr.total=j.total||arr.length;
+  return arr;
 }
 function bgmAliases(it){
   const a=(it.infobox||[]).find(b=>b.key==='别名');
@@ -1022,7 +1024,7 @@ function hitHTML(m){
   return '<div class="hit"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><div><h4>'+esc(aniName(m))+'</h4><p>'+esc([t.native,t.romaji].filter(x=>x&&x!==aniName(m)).join(' / '))+'</p><p>'+esc(meta)+'</p></div>'+
     '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
 }
-let bgmHits=[],aniTok=null;
+let bgmHits=[],aniTok=null,bgmMore=null,bgmDraw=null;
 let lastQ='',lastType='ANIME',pendingCn='';
 function bgmHitHTML(it,i){
   const c=conv();
@@ -1039,7 +1041,7 @@ function bgmHitHTML(it,i){
 function closeBtn(){return '<button class="btn small" type="button" data-close>關閉</button>';}
 async function searchAnilist(q,type,note){
   const box=$('results');
-  const d=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
+  const d=await gql('query($q:String,$t:MediaType){Page(perPage:25){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
   const ms=d.Page.media;
   const draw=()=>{box.innerHTML='<div class="results-head"><span>'+(note?esc(note)+'　':'')+'AniList 搜尋「'+esc(q)+'」（'+ms.length+'）</span>'+closeBtn()+'</div>'+
     (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。可以改打片名的其中幾個字，或換成日文、英文片名。</p>');};
@@ -1055,19 +1057,37 @@ $('searchForm').addEventListener('submit',async ev=>{
   try{
     if(!hasHan(q)){await searchAnilist(q,type);return;}
     let hits;
-    try{hits=await bgmSearch(conv().toCn(q),type);}
+    let kw=conv().toCn(q);
+    try{hits=await bgmSearch(kw,type);}
     catch(e){await searchAnilist(q,type,'中文資料庫暫時連不上，改用');return;}
-    if(!hits.length&&conv().toCn(q)!==q){try{hits=await bgmSearch(q,type);}catch(e){hits=[];}}
+    if(!hits.length&&kw!==q){kw=q;try{hits=await bgmSearch(q,type);}catch(e){hits=[];}}
     bgmHits=hits;
-    const draw=()=>{box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+hits.length+'）</span>'+closeBtn()+'</div>'+
+    bgmMore={kw,type,q};
+    const draw=()=>{box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+(hits.total>hits.length?hits.length+' / 共 '+hits.total:hits.length)+'）</span>'+closeBtn()+'</div>'+
       (hits.length?hits.map(bgmHitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。試試只打片名的其中兩三個字，或改打中國譯名、日文片名。</p>')+
+      (hits.total>hits.length?'<div style="text-align:center;margin:10px 0"><button class="btn" type="button" data-bgmmore>載入更多（還有 '+(hits.total-hits.length)+' 部）</button></div>':'')+
       '<p style="font-size:13px;color:var(--muted);margin:10px 0 6px">不是你要的？<button class="btn small" type="button" data-anilist>改用 AniList 搜尋</button></p>';};
-    draw();
+    bgmDraw=draw;draw();
     if(hits.length){const tok=q;await wikiTw(hits.map(h=>h.name));if(lastQ===tok&&bgmHits===hits)draw();}
   }catch(e){box.innerHTML='<div class="results-head"><span>搜尋失敗</span>'+closeBtn()+'</div>';netError(e);}
 });
 $('results').addEventListener('click',async ev=>{
   if(ev.target.closest('[data-close]')){$('results').classList.add('hidden');return;}
+  const mb=ev.target.closest('[data-bgmmore]');
+  if(mb&&bgmMore&&bgmDraw){
+    mb.disabled=true;mb.textContent='載入中…';
+    const hits=bgmHits;
+    try{
+      const more=await bgmSearch(bgmMore.kw,bgmMore.type,hits.length);
+      if(bgmHits!==hits)return;
+      const have=new Set(hits.map(h=>h.id));
+      more.forEach(h=>{if(!have.has(h.id))hits.push(h);});
+      if(!more.length)hits.total=hits.length;
+      bgmDraw();
+      await wikiTw(more.map(h=>h.name));if(bgmHits===hits)bgmDraw();
+    }catch(e){netError(e);mb.disabled=false;mb.textContent='載入更多';}
+    return;
+  }
   if(ev.target.closest('[data-anilist]')){
     $('results').innerHTML='<div class="results-head">搜尋中…</div>';
     pendingCn='';
@@ -1099,9 +1119,9 @@ $('results').addEventListener('click',async ev=>{
 
 /* ---------- seasonal browser ---------- */
 const SEASONS=['WINTER','SPRING','SUMMER','FALL'];
-let sv=(()=>{const d=new Date();return {y:d.getFullYear(),i:Math.floor(d.getMonth()/3),page:1,items:[],more:false};})();
+let sv=(()=>{const d=new Date();return {y:d.getFullYear(),i:Math.floor(d.getMonth()/3),page:1,items:[],more:false,carry:[]};})();
 async function loadSeason(reset){
-  if(reset){sv.page=1;sv.items=[];}
+  if(reset){sv.page=1;sv.items=[];sv.carry=[];loadCarry();}
   renderSeason(true);
   try{
     const d=await gql('query($s:MediaSeason,$y:Int,$p:Int){Page(page:$p,perPage:30){pageInfo{hasNextPage} media(season:$s,seasonYear:$y,type:ANIME,isAdult:false,sort:POPULARITY_DESC){'+FIELDS+'}}}',{s:SEASONS[sv.i],y:sv.y,p:sv.page});
@@ -1112,19 +1132,46 @@ async function loadSeason(reset){
   await wikiTw(d0(items));
   if(sv.items===items&&$('seasonDlg').open)renderSeason(false);
 }
+/* 跨季續播：之前就開播、這一季還在播的作品（例如名偵探柯南、航海王）。
+   做法是看這一季第 3 週有哪些作品在播，挑出開播日早於這一季的。 */
+async function loadCarry(){
+  const y=sv.y,i=sv.i;
+  const start=Date.UTC(y,i*3,1)/1000-8*3600;
+  const startNum=y*10000+(i*3+1)*100+1;
+  const a=start+14*86400,b=start+21*86400;
+  const seen=new Map();
+  try{
+    for(let pg=1;pg<=4;pg++){
+      const d=await gql('query($a:Int,$b:Int,$p:Int){Page(page:$p,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater:$a,airingAt_lesser:$b){media{isAdult '+FIELDS+'}}}}',{a,b,p:pg});
+      d.Page.airingSchedules.forEach(x=>{
+        const m=x.media;if(!m||m.isAdult||seen.has(m.id)||!ANIME_FMT.includes(m.format))return;
+        const sd=m.startDate||{};const n=(sd.year||0)*10000+(sd.month||0)*100+(sd.day||0);
+        if(n&&n<startNum)seen.set(m.id,m);
+      });
+      if(!d.Page.pageInfo.hasNextPage)break;
+    }
+  }catch(e){return;}
+  if(sv.y!==y||sv.i!==i)return;
+  sv.carry=[...seen.values()];
+  if($('seasonDlg').open)renderSeason(false);
+  await wikiTw(d0(sv.carry));
+  if(sv.y===y&&sv.i===i&&$('seasonDlg').open)renderSeason(false);
+}
 function d0(items){return items.map(m=>m.title&&m.title.native).filter(Boolean).slice(-30);}
 function renderSeason(loading){
-  const items=sv.items.map(m=>{
+  const card=m=>{
     const t=m.title||{};const added=!!findEntryByMedia(m.id);
     const fmt=FORMAT_ZH[m.format]||m.format||'';
     const eps=m.episodes?m.episodes+' 集':'集數未定';
     return '<div class="sitem"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><h4>'+esc(aniName(m))+'</h4><p>'+esc(fmt+'　'+eps)+'</p>'+
       '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
-  }).join('');
+  };
+  const items=sv.items.map(card).join('');
+  const carry=sv.carry.length?'<h3 class="sec">跨季續播（之前開播，這季還在播）</h3><div class="sgrid">'+sv.carry.map(card).join('')+'</div>':'';
   $('seasonBody').innerHTML='<div class="season-nav"><button class="btn small" type="button" data-nav="-1" aria-label="上一季">‹ 上一季</button><h2>'+sv.y+' 年'+SEASON_ZH[SEASONS[sv.i]]+'季新番</h2><button class="btn small" type="button" data-nav="1" aria-label="下一季">下一季 ›</button><button class="x" type="button" data-close aria-label="關閉">×</button></div>'+
     '<div class="sgrid">'+items+'</div>'+
     (loading?'<p style="color:var(--muted)">載入中…</p>':(!sv.items.length?'<p style="color:var(--muted)">這一季目前還沒有資料。</p>':''))+
-    (!loading&&sv.more?'<div style="text-align:center;margin-top:16px"><button class="btn" type="button" data-more>載入更多</button></div>':'');
+    (!loading&&sv.more?'<div style="text-align:center;margin-top:16px"><button class="btn" type="button" data-more>載入更多</button></div>':'')+carry;
 }
 function openSeason(){$('seasonDlg').showModal();if(!sv.items.length)loadSeason(true);else renderSeason(false);}
 $('openSeason').onclick=openSeason;
