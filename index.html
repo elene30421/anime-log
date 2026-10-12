@@ -179,13 +179,14 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
 }
 @media (prefers-reduced-motion:reduce){*{transition:none !important}.cell:hover{transform:none !important}}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.4.2/dist/umd/full.js" defer></script>
 </head>
 <body>
 <div class="wrap">
   <header class="top">
     <div class="brand">
       <h1>追番帳</h1>
-      <p>作品資料自動從 AniList 抓取，你只需要點你看到哪一集。</p>
+      <p>中文片名來自 Bangumi，集數與播出時間來自 AniList，你只需要點你看到哪一集。</p>
     </div>
     <div class="tally" id="tally"></div>
   </header>
@@ -193,7 +194,7 @@ h3.sec{font-size:15px;margin:20px 0 8px;padding-top:14px;border-top:1px solid va
   <div class="bar-tools">
     <form class="search" id="searchForm">
       <select id="searchType" aria-label="類型"><option value="ANIME">動畫</option><option value="MANGA">漫畫</option></select>
-      <input id="searchInput" type="search" placeholder="輸入日文、英文或羅馬拼音片名，例如 葬送のフリーレン" autocomplete="off">
+      <input id="searchInput" type="search" placeholder="輸入片名，中文、日文、英文都可以，例如 芙莉蓮" autocomplete="off">
       <button type="submit">搜尋</button>
     </form>
     <button class="btn primary" id="openSeason">瀏覽每季新番</button>
@@ -316,12 +317,59 @@ async function buildChain(id){
   return before.concat([cur],after);
 }
 
+/* ---------- Bangumi（中文片名）+ 繁簡轉換 ---------- */
+const BGM='https://api.bgm.tv/v0/search/subjects?limit=12';
+const cvt={toCn:s=>s,toTw:s=>s,ok:false};
+function conv(){
+  if(!cvt.ok&&window.OpenCC){
+    try{cvt.toCn=OpenCC.Converter({from:'tw',to:'cn'});cvt.toTw=OpenCC.Converter({from:'cn',to:'tw'});cvt.ok=true;}catch(e){}
+  }
+  return cvt;
+}
+const norm=s=>String(s||'').normalize('NFKC').replace(/[\s・·:：!！?？、,，.。'"「」『』\-~〜♪☆★]/g,'').toLowerCase();
+const hasHan=s=>/[\u3400-\u9fff]/.test(s);
+async function bgmSearch(q,type){
+  let res;
+  try{
+    res=await fetch(BGM,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({keyword:q,sort:'match',filter:{type:[type==='MANGA'?1:2],nsfw:false}})});
+  }catch(e){throw new Error('BGM');}
+  if(!res.ok)throw new Error('BGM');
+  const j=await res.json();
+  return j.data||[];
+}
+function bgmAliases(it){
+  const a=(it.infobox||[]).find(b=>b.key==='别名');
+  if(!a)return [];
+  return Array.isArray(a.value)?a.value.map(v=>v&&v.v).filter(Boolean):[String(a.value)];
+}
+async function bgmToAnilist(it,type){
+  const n=it.name;if(!n)return null;
+  const year=it.date?parseInt(it.date.slice(0,4),10):null;
+  const d=await gql('query($q:String,$t:MediaType){Page(perPage:8){media(search:$q,type:$t,sort:SEARCH_MATCH){id title{native romaji} startDate{year}}}}',{q:n,t:type});
+  const ms=d.Page.media;if(!ms.length)return null;
+  const exact=ms.filter(m=>norm(m.title.native)===norm(n));
+  const pool=exact.length?exact:ms;
+  const byYear=year?pool.find(m=>m.startDate&&m.startDate.year===year):null;
+  if(byYear)return byYear.id;
+  return exact.length?exact[0].id:(year?null:ms[0].id);
+}
+async function lookupCn(s){
+  const n=s.title&&s.title.native;if(!n)return '';
+  try{
+    const r=await bgmSearch(n,s.type);
+    const y=s.start&&s.start.year;
+    const hit=r.find(x=>norm(x.name)===norm(n))||r.find(x=>y&&x.date&&+x.date.slice(0,4)===y&&norm(x.name).includes(norm(n).slice(0,4)));
+    return hit&&hit.name_cn?conv().toTw(hit.name_cn):'';
+  }catch(e){return '';}
+}
+
 /* ---------- helpers ---------- */
 function findEntryByMedia(id){return state.entries.find(e=>e.seasons.some(s=>s.id===id));}
 function getEntry(key){return state.entries.find(e=>String(e.key)===String(key));}
 function unit(e){return e.seasons[0].type==='MANGA'?'話':'集';}
-function titleOf(e){const t=e.seasons[0].title;return e.customTitle||t.native||t.romaji||t.english||'（無標題）';}
-function subOf(e){const t=e.seasons[0].title;return [t.romaji,t.english].filter(x=>x&&x!==titleOf(e)).join(' / ');}
+function titleOf(e){const t=e.seasons[0].title;return e.customTitle||e.cnTitle||t.native||t.romaji||t.english||'（無標題）';}
+function subOf(e){const t=e.seasons[0].title;const main=titleOf(e);return [t.native,t.romaji].filter(x=>x&&x!==main).join(' / ');}
 function aired(s){
   if(s.status==='FINISHED'||s.status==='CANCELLED')return s.episodes==null?null:s.episodes;
   if(s.status==='RELEASING'||s.status==='HIATUS'){
@@ -389,7 +437,7 @@ function fmtAir(ts){
 function fmtDate(t){const d=new Date(t);return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate();}
 
 /* ---------- add ---------- */
-async function addMedia(id,btn){
+async function addMedia(id,btn,cn){
   if(findEntryByMedia(id)){toast('已經在清單裡了');return;}
   if(btn){btn.disabled=true;btn.textContent='抓取中…';}
   try{
@@ -400,7 +448,8 @@ async function addMedia(id,btn){
       chain.forEach(s=>{if(!known.has(s.id))ex.seasons.push(s);});
       save();render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
     }else{
-      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
+      const cnTitle=cn||await lookupCn(chain[0]);
+      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnChecked:true,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
       save();render();
       toast('已加入「想看」，共 '+chain.length+(chain[0].type==='MANGA'?' 部':' 季'));
     }
@@ -436,6 +485,11 @@ async function refreshAll(manual){
         e.newSeason=true;newFound++;
       }
       e.syncedAt=Date.now();
+    }
+    let filled=0;
+    for(const e of state.entries){
+      if(e.cnChecked||filled>=10)continue;
+      e.cnTitle=await lookupCn(e.seasons[0]);e.cnChecked=true;filled++;
     }
     state.lastSync=Date.now();save();
     toast(newFound?'更新完成，發現 '+newFound+' 個新的一季':'更新完成');
@@ -556,7 +610,7 @@ function renderDetail(){
   const notes=e.notes.slice().reverse().map(n=>'<div class="note"><div class="note-meta"><span>'+esc(fmtDate(n.at))+(n.tag?'　<b>'+esc(n.tag)+'</b>':'')+'</span><button class="note-del" type="button" data-act="delnote" data-id="'+n.id+'">刪除</button></div><div class="note-text">'+esc(n.text)+'</div></div>').join('')||'<p style="color:var(--muted);font-size:14px;margin:6px 0">還沒有心得。看完一集想記點什麼就寫在上面。</p>';
   $('detailBody').innerHTML=
     '<div class="dlg-head"><img src="'+esc(first.cover)+'" alt=""><div><h2>'+esc(titleOf(e))+'</h2><p>'+esc(subOf(e))+'</p></div><button class="x" type="button" data-act="close" aria-label="關閉">×</button></div>'+
-    '<div class="field"><label for="dName">顯示名稱（可改成中文片名）</label><input id="dName" value="'+esc(e.customTitle)+'" placeholder="'+esc(first.title.native||first.title.romaji||'')+'"></div>'+
+    '<div class="field"><label for="dName">自訂顯示名稱（留空就用自動抓到的中文名）</label><input id="dName" value="'+esc(e.customTitle)+'" placeholder="'+esc(e.cnTitle||first.title.native||first.title.romaji||'')+'"></div>'+
     '<div class="row2"><div class="field"><label for="dStatus">我的狀態</label><select id="dStatus">'+opts+'</select></div><div class="field"><label for="dRate">評分</label><select id="dRate">'+rate+'</select></div></div>'+
     '<h3 class="sec">'+(first.type==='MANGA'?'進度':'各季資訊與進度')+'</h3>'+seasons+
     '<h3 class="sec">心得</h3>'+
@@ -633,21 +687,63 @@ function hitHTML(m){
   return '<div class="hit"><img src="'+esc(m.coverImage&&m.coverImage.large)+'" alt="" loading="lazy"><div><h4>'+esc(t.native||t.romaji)+'</h4><p>'+esc(t.romaji||'')+'</p><p>'+esc(meta)+'</p></div>'+
     '<button class="btn small'+(added?'':' primary')+'" type="button" data-add="'+m.id+'"'+(added?' disabled':'')+'>'+(added?'已加入':'加入')+'</button></div>';
 }
+let bgmHits=[];
+let lastQ='',lastType='ANIME';
+function bgmHitHTML(it,i){
+  const c=conv();
+  const cn=it.name_cn?c.toTw(it.name_cn):'';
+  const img=it.images?(it.images.common||it.images.large||it.images.medium):'';
+  const al=bgmAliases(it).filter(a=>a!==it.name_cn&&a!==it.name).slice(0,3).map(c.toTw);
+  const meta=[it.platform,it.date?it.date.slice(0,4):'',it.eps?it.eps+(lastType==='MANGA'?' 話':' 集'):''].filter(Boolean).join('　');
+  return '<div class="hit"><img src="'+esc(img)+'" alt="" loading="lazy"><div><h4>'+esc(cn||it.name)+'</h4><p>'+esc(cn?it.name:'')+'</p>'+
+    (al.length?'<p>別名：'+esc(al.join('、'))+'</p>':'')+'<p>'+esc(meta)+'</p></div>'+
+    '<button class="btn small primary" type="button" data-bgm="'+i+'">加入</button></div>';
+}
+function closeBtn(){return '<button class="btn small" type="button" data-close>關閉</button>';}
+async function searchAnilist(q,type,note){
+  const box=$('results');
+  const d=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
+  const ms=d.Page.media;
+  box.innerHTML='<div class="results-head"><span>'+(note?esc(note)+'　':'')+'AniList 搜尋「'+esc(q)+'」（'+ms.length+'）</span>'+closeBtn()+'</div>'+
+    (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。可以改打片名的其中幾個字，或換成日文、英文片名。</p>');
+}
 $('searchForm').addEventListener('submit',async ev=>{
   ev.preventDefault();
   const q=$('searchInput').value.trim();if(!q)return;
-  const type=$('searchType').value;
+  const type=$('searchType').value;lastQ=q;lastType=type;
   const box=$('results');box.classList.remove('hidden');
   box.innerHTML='<div class="results-head">搜尋中…</div>';
   try{
-    const d=await gql('query($q:String,$t:MediaType){Page(perPage:10){media(search:$q,type:$t,isAdult:false,sort:SEARCH_MATCH){'+FIELDS+'}}}',{q,t:type});
-    const ms=d.Page.media;
-    box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+ms.length+'）</span><button class="btn small" type="button" data-close>關閉</button></div>'+
-      (ms.length?ms.map(hitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。AniList 不收中文片名，請改用日文原名、英文或羅馬拼音。</p>');
-  }catch(e){box.innerHTML='<div class="results-head"><span>搜尋失敗</span><button class="btn small" type="button" data-close>關閉</button></div>';netError(e);}
+    if(!hasHan(q)){await searchAnilist(q,type);return;}
+    let hits;
+    try{hits=await bgmSearch(conv().toCn(q),type);}
+    catch(e){await searchAnilist(q,type,'中文資料庫暫時連不上，改用');return;}
+    if(!hits.length&&conv().toCn(q)!==q){try{hits=await bgmSearch(q,type);}catch(e){hits=[];}}
+    bgmHits=hits;
+    box.innerHTML='<div class="results-head"><span>「'+esc(q)+'」的搜尋結果（'+hits.length+'）</span>'+closeBtn()+'</div>'+
+      (hits.length?hits.map(bgmHitHTML).join(''):'<p style="color:var(--muted);font-size:14px">找不到。試試只打片名的其中兩三個字，或改打中國譯名、日文片名。</p>')+
+      '<p style="font-size:13px;color:var(--muted);margin:10px 0 6px">不是你要的？<button class="btn small" type="button" data-anilist>改用 AniList 搜尋</button></p>';
+  }catch(e){box.innerHTML='<div class="results-head"><span>搜尋失敗</span>'+closeBtn()+'</div>';netError(e);}
 });
-$('results').addEventListener('click',ev=>{
+$('results').addEventListener('click',async ev=>{
   if(ev.target.closest('[data-close]')){$('results').classList.add('hidden');return;}
+  if(ev.target.closest('[data-anilist]')){
+    $('results').innerHTML='<div class="results-head">搜尋中…</div>';
+    try{await searchAnilist(lastQ,lastType);}catch(e){netError(e);}
+    return;
+  }
+  const bb=ev.target.closest('[data-bgm]');
+  if(bb){
+    const it=bgmHits[+bb.dataset.bgm];if(!it)return;
+    bb.disabled=true;bb.textContent='對應中…';
+    try{
+      const id=await bgmToAnilist(it,lastType);
+      if(!id){toast('AniList 找不到這部的集數資料，可以試試「改用 AniList 搜尋」');bb.disabled=false;bb.textContent='加入';return;}
+      if(findEntryByMedia(id)){toast('已經在清單裡了');bb.textContent='已加入';return;}
+      await addMedia(id,bb,it.name_cn?conv().toTw(it.name_cn):'');
+    }catch(e){netError(e);bb.disabled=false;bb.textContent='加入';}
+    return;
+  }
   const b=ev.target.closest('[data-add]');if(b)addMedia(+b.dataset.add,b);
 });
 
