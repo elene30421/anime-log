@@ -493,7 +493,9 @@ function wikiResolver(q){
   const m=new Map();
   (q.normalized||[]).forEach(x=>m.set(x.from,x.to));
   const r=new Map();(q.redirects||[]).forEach(x=>r.set(x.from,x.to));
-  return t=>{let x=m.get(t)||t;return r.get(x)||x;};
+  const f=t=>{let x=m.get(t)||t;return r.get(x)||x;};
+  f.redirected=t=>r.has(m.get(t)||t);
+  return f;
 }
 const wikiClean=t=>String(t||'').replace(/\s*[（(][^（）()]*[)）]\s*$/,'').trim();
 async function wikiTw(names){
@@ -504,14 +506,16 @@ async function wikiTw(names){
       const rj=wikiResolver(ja),pj={};
       Object.values(ja.pages||{}).forEach(pg=>pj[pg.title]=pg);
       const zhOf=new Map();
-      need.forEach(n=>{const pg=pj[rj(n)];const ll=pg&&!pg.pageprops&&pg.langlinks&&pg.langlinks[0];zhOf.set(n,ll?ll['*']:'');});
+      /* 日文片名被轉址到別的條目（例如轉到「〇〇系列」總條目）就不採用，
+         否則同系列每一部都會變成同一個名字 */
+      need.forEach(n=>{const pg=rj.redirected(n)?null:pj[rj(n)];const ll=pg&&!pg.pageprops&&pg.langlinks&&pg.langlinks[0];zhOf.set(n,ll?ll['*']:'');});
       const zhs=[...new Set([...zhOf.values()].filter(Boolean))];
       const tw={};
       if(zhs.length){
         const zh=await wikiApi('zh',{prop:'info',inprop:'varianttitles',titles:zhs.join('|')});
         const rz=wikiResolver(zh),pz={};
         Object.values(zh.pages||{}).forEach(pg=>pz[pg.title]=pg);
-        zhs.forEach(z=>{const pg=pz[rz(z)];tw[z]=pg&&pg.varianttitles?(pg.varianttitles['zh-tw']||''):'';});
+        zhs.forEach(z=>{const pg=pz[rz(z)];const t=pg&&pg.varianttitles?(pg.varianttitles['zh-tw']||''):'';tw[z]=/系列|列表/.test(t)?'':t;});
       }
       need.forEach(n=>{const z=zhOf.get(n);wikiCache.set(n,z&&tw[z]?wikiClean(tw[z]):'');});
     }catch(e){}
