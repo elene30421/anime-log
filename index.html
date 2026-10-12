@@ -476,6 +476,20 @@ function bgmAliases(it){
   if(!a)return [];
   return Array.isArray(a.value)?a.value.map(v=>v&&v.v).filter(Boolean):[String(a.value)];
 }
+const hasKana=s=>/[぀-ヿ]/.test(s);
+/* 選顯示用的中文名：1. 你搜尋時打的字剛好是別名 → 用你打的；
+   2. 別名裡有繁體字寫的中文名（通常是台灣/港澳譯名）→ 用第一個；
+   3. 都沒有 → 用 Bangumi 的主要中文名（中國譯名，轉繁體） */
+function pickCn(it,q){
+  const c=conv(),al=bgmAliases(it);
+  if(q){
+    const t=norm(c.toCn(q));
+    if(t&&al.concat(it.name_cn||'').some(a=>norm(c.toCn(a))===t)&&norm(c.toCn(it.name_cn||''))!==t)return c.toTw(q);
+  }
+  const tw=al.find(a=>hasHan(a)&&!hasKana(a)&&a!==it.name&&c.toCn(a)!==a&&norm(c.toCn(a))!==norm(c.toCn(it.name_cn||'')));
+  if(tw)return tw;
+  return it.name_cn?c.toTw(it.name_cn):'';
+}
 async function bgmToAnilist(it,type){
   const n=it.name;if(!n)return null;
   const year=it.date?parseInt(it.date.slice(0,4),10):null;
@@ -493,7 +507,7 @@ async function lookupCn(s){
     const r=await bgmSearch(n,s.type);
     const y=s.start&&s.start.year;
     const hit=r.find(x=>norm(x.name)===norm(n))||r.find(x=>y&&x.date&&+x.date.slice(0,4)===y&&norm(x.name).includes(norm(n).slice(0,4)));
-    return hit&&hit.name_cn?conv().toTw(hit.name_cn):'';
+    return hit?pickCn(hit,''):'';
   }catch(e){return '';}
 }
 
@@ -582,7 +596,7 @@ async function addMedia(id,btn,cn){
       changed(ex);render();toast('這部屬於「'+titleOf(ex)+'」，已併入');
     }else{
       const cnTitle=cn||await lookupCn(chain[0]);
-      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnChecked:true,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
+      state.entries.push({key:chain[0].id,seasons:chain,progress:{s:0,e:0},status:'plan',rating:null,review:'',notes:[],customTitle:'',cnTitle,cnVer:2,addedAt:Date.now(),touchedAt:Date.now(),syncedAt:Date.now(),newSeason:false});
       changed(state.entries[state.entries.length-1]);render();
       toast('已加入「想看」，共 '+chain.length+(chain[0].type==='MANGA'?' 部':' 季'));
     }
@@ -621,8 +635,8 @@ async function refreshAll(manual){
     }
     let filled=0;
     for(const e of state.entries){
-      if(e.cnChecked||filled>=10)continue;
-      e.cnTitle=await lookupCn(e.seasons[0]);e.cnChecked=true;filled++;
+      if(e.cnVer===2||filled>=10)continue;
+      const t=await lookupCn(e.seasons[0]);if(t)e.cnTitle=t;e.cnVer=2;filled++;
     }
     state.lastSync=Date.now();save();
     toast(newFound?'更新完成，發現 '+newFound+' 個新的一季':'更新完成');
@@ -824,11 +838,12 @@ let bgmHits=[];
 let lastQ='',lastType='ANIME';
 function bgmHitHTML(it,i){
   const c=conv();
-  const cn=it.name_cn?c.toTw(it.name_cn):'';
+  const cn=pickCn(it,lastQ);
+  const mainCn=it.name_cn?c.toTw(it.name_cn):'';
   const img=it.images?(it.images.common||it.images.large||it.images.medium):'';
-  const al=bgmAliases(it).filter(a=>a!==it.name_cn&&a!==it.name).slice(0,3).map(c.toTw);
+  const al=bgmAliases(it).filter(a=>a!==it.name_cn&&a!==it.name).map(c.toTw).filter(a=>a!==cn).slice(0,3);
   const meta=[it.platform,it.date?it.date.slice(0,4):'',it.eps?it.eps+(lastType==='MANGA'?' 話':' 集'):''].filter(Boolean).join('　');
-  return '<div class="hit"><img src="'+esc(img)+'" alt="" loading="lazy"><div><h4>'+esc(cn||it.name)+'</h4><p>'+esc(cn?it.name:'')+'</p>'+
+  return '<div class="hit"><img src="'+esc(img)+'" alt="" loading="lazy"><div><h4>'+esc(cn||it.name)+'</h4><p>'+esc(cn?it.name:'')+'</p>'+(mainCn&&mainCn!==cn?'<p>中國譯名：'+esc(mainCn)+'</p>':'')+
     (al.length?'<p>別名：'+esc(al.join('、'))+'</p>':'')+'<p>'+esc(meta)+'</p></div>'+
     '<button class="btn small primary" type="button" data-bgm="'+i+'">加入</button></div>';
 }
@@ -873,9 +888,7 @@ $('results').addEventListener('click',async ev=>{
       const id=await bgmToAnilist(it,lastType);
       if(!id){toast('AniList 找不到這部的集數資料，可以試試「改用 AniList 搜尋」');bb.disabled=false;bb.textContent='加入';return;}
       if(findEntryByMedia(id)){toast('已經在清單裡了');bb.textContent='已加入';return;}
-      const c=conv(),typed=norm(c.toCn(lastQ));
-      const byAlias=bgmAliases(it).some(a=>norm(c.toCn(a))===typed)&&norm(c.toCn(it.name_cn||''))!==typed;
-      await addMedia(id,bb,byAlias?c.toTw(lastQ):(it.name_cn?c.toTw(it.name_cn):''));
+      await addMedia(id,bb,pickCn(it,lastQ));
     }catch(e){netError(e);bb.disabled=false;bb.textContent='加入';}
     return;
   }
